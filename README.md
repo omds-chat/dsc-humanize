@@ -278,9 +278,11 @@ openssl pkeyutl -verify -pubin -inkey dist/author_pub.pem -rawin -in dist/plugin
 | 签名 | 签名者 | 产物 | 信任来源 |
 |:---:|:---:|:---:|:---:|
 | 作者签名 | 插件作者 | `plugin.js.author.sig` | 作者公钥 `plugins/<作者>/author_pub.pem` |
-| 合集签名 | 插件合集 | `meta.json.sig`、`plugin.js.sig` | 根 CA 签发的合集证书 `eec.pem` |
+| 合集签名 | 插件合集 | `plugin.js.sig`、各层 `manifest.json.sig` | 根 CA 签发的合集证书 `certs/<来源 id>/<来源 id>-eec.crt` |
 
-作者只负责产出 `.author.sig` 与 `author_pub.pem`。CMS 的 `*.sig` 由合集在收录时生成,作者不要自己产出,也不要把 `.author.sig` 改名成 `.sig`。
+合集签名只有两类:CMS 格式的 `plugin.js.sig`,以及每层 `manifest.json` 对应的 `manifest.json.sig`。`meta.json` 不再单独签名,它的完整性由合集的三层哈希清单校验。合集证书按 `certs/<来源 id>/<来源 id>-eec.crt` 布局存放,随合集页面分发,不参与任何清单;根目录的 `eec.pem` 只是待删除的兼容回退,新内容不要使用。
+
+作者只负责产出 `.author.sig` 与 `author_pub.pem`。上述 `*.sig` 由合集在收录时用 EEC 证书生成,作者不要自己产出,也不要把 `.author.sig` 改名成 `.sig`。
 
 ## 把产物装进 DeepSeek-Chat-Enhanced
 
