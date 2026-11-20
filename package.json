@@ -1,0 +1,30 @@
+{
+  "name": "dsc-humanize",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "dsc 插件 dsc-humanize:把文本改写得更自然、更像真人书写",
+  "license": "Apache-2.0",
+  "author": "omds-chat",
+  "scripts": {
+    "build": "node build.mjs",
+    "type": "tsc --noEmit",
+    "validate:specs": "node scripts/validate-specs.mjs"
+  },
+  "dsc": {
+    "engines": "^1.0.0",
+    "description": {
+      "zh-CN": "dsc 插件 dsc-humanize:把文本改写得更自然、更像真人书写",
+      "en-US": "dsc plugin dsc-humanize: rewrite text so it reads more naturally and human"
+    },
+    "home_page": "https://github.com/omds-chat/dsc-humanize",
+    "repo_link": "https://github.com/omds-chat/dsc-humanize"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
