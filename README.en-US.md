@@ -35,7 +35,7 @@ This round lands the kernel skeleton, and humanizing the assistant is still inac
 
 - The kernel is pure computation: it returns the intent, the strategy and prompt fragments, and never writes back to a request or reads host state.
 - Host capability is pending: dsc-plugin-engine has no entry point for changing request parameters or the system prompt, so the kernel only produces a strategy. Any new capability is evaluated in the main repository; this repository assumes no interface.
-- The asset format is pending: `AssetBundle` fixes only the fields the kernel reads, while the label set, the strategy table and the persona come from an external bundle. Until the fields, version and import/export rules of a standard `dsc-humanize-asset` bundle are settled, the preset bundles from `dsc-humanize-inner-asset` cannot be wired up; this section follows once it settles.
+- The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0), but the kernel's `AssetBundle` is still a whole-package structure; reading by type and the import/export path are not built yet, so the preset packages from `dsc-humanize-inner-asset` cannot be wired up until the kernel catches up.
 - The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one import/export of humanization assets are all pending; the kernel only offers pure classification, strategy and injection computation.
 - The host is not wired yet: activation only logs the kernel version, loads no real asset and consumes no host data.
 - Self-checks cover types, the build, the specs and the kernel pure functions: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
@@ -211,8 +211,8 @@ The `dsc` block in `package.json`:
 "dsc": {
   "engines": "^1.0.0",
   "description": {
-    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
-    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
+    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
+    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"
   },
   "home_page": "https://github.com/omds-chat/dsc-humanize",
   "repo_link": "https://github.com/omds-chat/dsc-humanize"

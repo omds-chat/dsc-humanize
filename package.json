@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "dsc 插件 dsc-humanize:让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
+  "description": "dsc 插件 dsc-humanize:让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
   "license": "Apache-2.0",
   "author": "omds-chat",
   "scripts": {
@@ -15,8 +15,8 @@
   "dsc": {
     "engines": "^1.0.0",
     "description": {
-      "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
-      "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
+      "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
+      "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"
     },
     "home_page": "https://github.com/omds-chat/dsc-humanize",
     "repo_link": "https://github.com/omds-chat/dsc-humanize"

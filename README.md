@@ -31,11 +31,11 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 | 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 本地数据可用;URL 只留读取通道接口,内核不发请求 |
 | 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 串起分类、策略与注入,产出一次规划结果 |
 | 资产编辑界面 | 尚未实现 | 插件还没有界面入口,资产的输入、编辑与导入导出都未落地 |
-| 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 未定稿:标准的 `dsc-humanize-asset` 资产包目前只约定内核读取所需字段 |
+| 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 格式由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0);内核当前的读取方式仍是整包结构,按类型读取待实现 |
 
 - 内核只做纯计算:输出意图、策略与提示词片段,不写回任何请求,也不读写宿主状态。
 - 宿主能力待定:当前 dsc-plugin-engine 没有修改请求参数与系统提示词的入口,内核因此只产出策略;新增能力的评估放在主线仓库,本仓库不预先假设接口。
-- 资产格式待定:`AssetBundle` 目前只约定读取所需字段,标签集、策略表与人物设定由外部资产包提供;标准 `dsc-humanize-asset` 的字段、版本与导入导出规则定稿前,`dsc-humanize-inner-asset` 的预设资产包还对接不上,本节随定稿同步更新。
+- 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),但内核的 `AssetBundle` 仍是整包结构;按类型读取与导入导出尚未实现,`dsc-humanize-inner-asset` 的预设包要等内核改造后才能直接对接。
 - 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导入导出都还没有落地,内核只提供分类、策略与注入的纯计算。
 - 未接入宿主:激活流程只记录内核版本,尚未装载真实资产,也不消费宿主数据。
 - 自检覆盖类型、构建、规范与内核纯函数:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
@@ -211,8 +211,8 @@ dist/
 "dsc": {
   "engines": "^1.0.0",
   "description": {
-    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
-    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
+    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
+    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"
   },
   "home_page": "https://github.com/omds-chat/dsc-humanize",
   "repo_link": "https://github.com/omds-chat/dsc-humanize"
