@@ -2,7 +2,11 @@
 
 [简体中文](README.md) | [English]
 
-dsc-humanize is a dsc plugin that aims to rewrite text so it reads more naturally and human. The project skeleton comes from dsc-plugin-template: source in TypeScript, bundled by esbuild into a single browser ESM file; the build also writes the runtime metadata, optionally signs `plugin.js`, and the output can be installed into DeepSeek-Chat-Enhanced by URL.
+dsc-humanize is a dsc plugin whose aim is to bring the assistant in ds-chat closer to what you expect. The plugin itself does not promise to turn the assistant into one fixed form: what the assistant should be like is what you enter and edit in the plugin interface.
+
+Under that positioning the plugin's job is full editing of humanization assets: the attributes you can set in the interface cover every attribute of the asset, an edit round-trips one-to-one into a standard `dsc-humanize-asset` bundle and a bundle of that format imports back one-to-one, so there is no attribute a user cannot set. `dsc-humanize-inner-asset` only provides importable preset bundles; it is one asset source and does not change the plugin's positioning.
+
+The project skeleton comes from dsc-plugin-template: source in TypeScript, bundled by esbuild into a single browser ESM file; the build also writes the runtime metadata, optionally signs `plugin.js`, and the output can be installed into DeepSeek-Chat-Enhanced by URL.
 
 ## Repository state
 
@@ -13,8 +17,9 @@ dsc-humanize is a dsc plugin that aims to rewrite text so it reads more naturall
 - LF line endings on every text output, with minification on by default
 - a set of checkable specs: the runtime spec, the development spec and their JSON Schemas, kept in this repository for local validation
 - a kernel skeleton: intent classification, label-to-strategy resolution, prompt injection assembly and an asset loading adapter, depending on neither a model nor a host capability
+- a dependency-free kernel test suite: Node `node:test` covers scoring, strategy merging, injection assembly, asset validation and loading, and kernel assembly
 
-This round lands the kernel skeleton, and the text rewriting feature is still inactive: at runtime the plugin only subscribes to the session switch event, writes to the plugin log, and shows one notice through a host message key, which is enough to confirm that the host loads and runs it.
+This round lands the kernel skeleton, and humanizing the assistant is still inactive: at runtime the plugin only subscribes to the session switch event, writes to the plugin log, and shows one notice through a host message key, which is enough to confirm that the host loads and runs it.
 
 ## Current implementation scope
 
@@ -25,12 +30,15 @@ This round lands the kernel skeleton, and the text rewriting feature is still in
 | Injection assembly | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | Pure function: joins the persona prefix and the injection text, deduplicates, and places the result |
 | Asset loading | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | Local data works; a URL is only a read transport interface and the kernel sends no request |
 | Kernel assembly | [src/humanize/kernel.ts](src/humanize/kernel.ts) | Wires classification, strategy and injection into one plan |
+| Asset editing UI | not implemented | The plugin has no interface entry yet, so entering, editing, importing and exporting assets are all pending |
+| Asset bundle format | [src/humanize/types.ts](src/humanize/types.ts) | Not final: a standard `dsc-humanize-asset` bundle currently fixes only the fields the kernel reads |
 
 - The kernel is pure computation: it returns the intent, the strategy and prompt fragments, and never writes back to a request or reads host state.
 - Host capability is pending: dsc-plugin-engine has no entry point for changing request parameters or the system prompt, so the kernel only produces a strategy. Any new capability is evaluated in the main repository; this repository assumes no interface.
-- The asset format is pending: `AssetBundle` fixes only the fields the kernel reads, while the label set, the strategy table and the persona come from an external asset package. This section will follow the format once it is settled.
+- The asset format is pending: `AssetBundle` fixes only the fields the kernel reads, while the label set, the strategy table and the persona come from an external bundle. Until the fields, version and import/export rules of a standard `dsc-humanize-asset` bundle are settled, the preset bundles from `dsc-humanize-inner-asset` cannot be wired up; this section follows once it settles.
+- The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one import/export of humanization assets are all pending; the kernel only offers pure classification, strategy and injection computation.
 - The host is not wired yet: activation only logs the kernel version, loads no real asset and consumes no host data.
-- Self-checks cover types and the build only: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs`. Rule scoring, strategy merging and injection assembly are pure functions and can get their own tests later.
+- Self-checks cover types, the build, the specs and the kernel pure functions: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
 
 ## Specs and schemas
 
@@ -74,6 +82,13 @@ dsc-humanize/
 │   └── runtime/
 │       └── meta.json         # runtime meta schema
 ├── scripts/
+│   ├── test/                 # kernel pure-function tests, run by node:test
+│   │   ├── ts-hooks.mjs      # resolve hook so the tests load .ts source directly
+│   │   ├── asset-loader.test.ts
+│   │   ├── injection-builder.test.ts
+│   │   ├── kernel.test.ts
+│   │   ├── rule-classifier.test.ts
+│   │   └── strategy-engine.test.ts
 │   └── validate-specs.mjs    # dependency-free spec validator
 ├── specs/
 │   ├── README.md             # spec area index and known differences
@@ -110,6 +125,7 @@ dsc-humanize/
 | `schemas/manifest/` | Manifest JSON Schema, aligned with the host manifest checks |
 | `schemas/runtime/` | JSON Schema for the runtime meta; the build self-validation covers its required and format rules |
 | `scripts/validate-specs.mjs` | Dependency-free validator for the schemas, samples and this repository meta |
+| `scripts/test/` | Kernel pure-function tests: scoring and ordering, strategy validation and merging, injection assembly, asset validation and loading, kernel assembly |
 | `specs/` | Spec area: runtime spec, development spec, version info |
 | `.env.example` | Environment template |
 
@@ -117,7 +133,7 @@ dsc-humanize/
 
 | Item | Requirement |
 |:---:|:---:|
-| Node.js | 18 or later |
+| Node.js | 18 or later; running the tests needs 22.18 or later |
 | pnpm | 12 or later |
 | OpenSSL | 3.0 or later, needed only when author signing is on |
 | Output browsers | Chrome 105, Edge 105, Safari 16, Firefox 110 |
@@ -132,6 +148,7 @@ cd dsc-humanize
 pnpm install
 pnpm run type
 pnpm run build
+pnpm run test
 ```
 
 | Command | Role |
@@ -141,6 +158,9 @@ pnpm run build
 | `pnpm run build` | Build every output |
 | `pnpm run build -- --no-minify` | Build without minification |
 | `pnpm run validate:specs` | Validate the spec schemas, samples and this repository meta |
+| `pnpm run test` | Run the kernel tests through `node --test` |
+
+The tests use the built-in `node:test`, need no dependency and run offline; they load the TypeScript source under `src` directly, so they need Node 22.18 or later (built-in type stripping). Run `pnpm run test` after changing the kernel.
 
 `build.mjs` takes one flag, `--no-minify`, which turns esbuild minification off. The minified output is much smaller, so keep the default when distributing.
 
@@ -190,7 +210,10 @@ The `dsc` block in `package.json`:
 ```json
 "dsc": {
   "engines": "^1.0.0",
-  "description": { "zh-CN": "把文本改写得更自然、更像真人书写", "en-US": "Rewrite text so it reads more naturally and human" },
+  "description": {
+    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
+    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
+  },
   "home_page": "https://github.com/omds-chat/dsc-humanize",
   "repo_link": "https://github.com/omds-chat/dsc-humanize"
 }
@@ -330,7 +353,7 @@ Things to keep in mind:
 
 `net:fetch` is available to built-in plugins only; a third-party manifest that requests it is rejected.
 
-This plugin currently requests `events:session` and `notify`, and subscribes to the single contribution point `session:changed`; add more only when the rewriting feature needs them, never capabilities it does not use.
+This plugin currently requests `events:session` and `notify`, and subscribes to the single contribution point `session:changed`; add more only when the humanization and asset editing features need them, never capabilities it does not use.
 
 ## Publishing
 

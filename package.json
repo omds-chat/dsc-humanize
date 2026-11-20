@@ -3,19 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "dsc 插件 dsc-humanize:把文本改写得更自然、更像真人书写",
+  "description": "dsc 插件 dsc-humanize:让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
   "license": "Apache-2.0",
   "author": "omds-chat",
   "scripts": {
     "build": "node build.mjs",
     "type": "tsc --noEmit",
-    "validate:specs": "node scripts/validate-specs.mjs"
+    "validate:specs": "node scripts/validate-specs.mjs",
+    "test": "node --import ./scripts/test/ts-hooks.mjs --test \"scripts/test/**/*.test.ts\""
   },
   "dsc": {
     "engines": "^1.0.0",
     "description": {
-      "zh-CN": "dsc 插件 dsc-humanize:把文本改写得更自然、更像真人书写",
-      "en-US": "dsc plugin dsc-humanize: rewrite text so it reads more naturally and human"
+      "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
+      "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
     },
     "home_page": "https://github.com/omds-chat/dsc-humanize",
     "repo_link": "https://github.com/omds-chat/dsc-humanize"

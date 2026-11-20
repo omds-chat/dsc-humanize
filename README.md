@@ -2,7 +2,11 @@
 
 [简体中文] | [English](README.en-US.md)
 
-dsc-humanize 是一个 dsc 插件,目标是把文本改写得更自然、更像真人书写。工程结构沿用 dsc-plugin-template:用 TypeScript 写源码,用 esbuild 打包成单个浏览器 ESM 文件;构建同时产出运行时元数据,可选地为 `plugin.js` 产出作者签名,产物可以直接在 DeepSeek-Chat-Enhanced 中从地址安装。
+dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你期望的样子。插件本身不承诺把助手变成某种固定形态:助手该是什么样子,由你在插件界面里输入与编辑。
+
+在这个定位下,插件要做的是对人性化资产的完整编辑能力:界面里能设置的属性覆盖资产的每一项,编辑结果可以一比一导出为标准 `dsc-humanize-asset` 资产包,也能把该格式的资产包一比一导入,因此不存在用户无法设置的属性。`dsc-humanize-inner-asset` 只提供可导入的预设资产包,是资产来源之一,不改变插件本身的定位。
+
+工程结构沿用 dsc-plugin-template:用 TypeScript 写源码,用 esbuild 打包成单个浏览器 ESM 文件;构建同时产出运行时元数据,可选地为 `plugin.js` 产出作者签名,产物可以直接在 DeepSeek-Chat-Enhanced 中从地址安装。
 
 ## 仓库现状
 
@@ -13,8 +17,9 @@ dsc-humanize 是一个 dsc 插件,目标是把文本改写得更自然、更像�
 - 文本产物强制 LF 换行,`plugin.js` 默认行压缩
 - 一套可校验的规范区:运行时规范、开发规范与 JSON Schema,随仓库保留用于本地校验
 - 一套内核骨架:意图分类、标签到策略的解析、提示词注入拼接与资产读取适配层,不依赖模型与宿主能力
+- 一套零依赖的内核测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产校验与加载、内核装配
 
-本轮的产物是内核骨架,文本改写功能尚未生效:运行时仍只订阅会话切换事件、写插件日志、用宿主文案键提示一次,用来确认插件能在宿主中正常加载与运行。
+本轮的产物是内核骨架,助手人性化尚未生效:运行时仍只订阅会话切换事件、写插件日志、用宿主文案键提示一次,用来确认插件能在宿主中正常加载与运行。
 
 ## 当前实现范围
 
@@ -25,12 +30,15 @@ dsc-humanize 是一个 dsc 插件,目标是把文本改写得更自然、更像�
 | 注入构建 | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | 纯函数:人设前缀与注入文本的拼接、去重与位置 |
 | 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 本地数据可用;URL 只留读取通道接口,内核不发请求 |
 | 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 串起分类、策略与注入,产出一次规划结果 |
+| 资产编辑界面 | 尚未实现 | 插件还没有界面入口,资产的输入、编辑与导入导出都未落地 |
+| 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 未定稿:标准的 `dsc-humanize-asset` 资产包目前只约定内核读取所需字段 |
 
 - 内核只做纯计算:输出意图、策略与提示词片段,不写回任何请求,也不读写宿主状态。
 - 宿主能力待定:当前 dsc-plugin-engine 没有修改请求参数与系统提示词的入口,内核因此只产出策略;新增能力的评估放在主线仓库,本仓库不预先假设接口。
-- 资产格式待定:`AssetBundle` 目前只约定读取所需字段,标签集、策略表与人物设定由外部资产包提供,格式定版后本节同步更新。
+- 资产格式待定:`AssetBundle` 目前只约定读取所需字段,标签集、策略表与人物设定由外部资产包提供;标准 `dsc-humanize-asset` 的字段、版本与导入导出规则定稿前,`dsc-humanize-inner-asset` 的预设资产包还对接不上,本节随定稿同步更新。
+- 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导入导出都还没有落地,内核只提供分类、策略与注入的纯计算。
 - 未接入宿主:激活流程只记录内核版本,尚未装载真实资产,也不消费宿主数据。
-- 自检只覆盖类型与构建:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`;规则分类、策略合并与注入拼接都是纯函数,可在后续单独补测试。
+- 自检覆盖类型、构建、规范与内核纯函数:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
 
 ## 规范与 Schema
 
@@ -74,6 +82,13 @@ dsc-humanize/
 │   └── runtime/
 │       └── meta.json         # runtime meta schema
 ├── scripts/
+│   ├── test/                 # 内核纯函数测试,node:test 运行
+│   │   ├── ts-hooks.mjs      # 让测试直接加载 .ts 源码的解析钩子
+│   │   ├── asset-loader.test.ts
+│   │   ├── injection-builder.test.ts
+│   │   ├── kernel.test.ts
+│   │   ├── rule-classifier.test.ts
+│   │   └── strategy-engine.test.ts
 │   └── validate-specs.mjs    # 零依赖规范校验脚本
 ├── specs/
 │   ├── README.md             # 规范区索引与已知差异
@@ -110,6 +125,7 @@ dsc-humanize/
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
 | `schemas/runtime/` | 运行时 meta 的 JSON Schema,构建自校验覆盖其中的必填与格式规则 |
 | `scripts/validate-specs.mjs` | 零依赖校验脚本,校验 Schema、样例与本仓库 meta |
+| `scripts/test/` | 内核纯函数测试:分类打分与排序、策略校验与合并、注入拼接、资产校验与加载、内核装配 |
 | `specs/` | 规范区:运行时规范、开发规范与版本信息 |
 | `.env.example` | 环境变量模板 |
 
@@ -117,7 +133,7 @@ dsc-humanize/
 
 | 项 | 要求 |
 |:---:|:---:|
-| Node.js | 18 或更高版本 |
+| Node.js | 18 或更高版本,跑测试需要 22.18 或更高版本 |
 | pnpm | 12 或更高版本 |
 | OpenSSL | 3.0 或更高版本,仅启用作者签名时需要 |
 | 产物目标浏览器 | Chrome 105、Edge 105、Safari 16、Firefox 110 |
@@ -132,6 +148,7 @@ cd dsc-humanize
 pnpm install
 pnpm run type
 pnpm run build
+pnpm run test
 ```
 
 | 命令 | 作用 |
@@ -141,6 +158,9 @@ pnpm run build
 | `pnpm run build` | 构建全部产物 |
 | `pnpm run build -- --no-minify` | 关闭行压缩后再构建 |
 | `pnpm run validate:specs` | 校验规范区的 Schema、样例与本仓库 meta 数据 |
+| `pnpm run test` | 运行 `node --test` 的内核测试 |
+
+测试用 Node 内置的 `node:test`,零依赖、离线可跑,直接加载 `src` 下的 TypeScript 源码,因此需要 Node 22.18 或更高版本(内置类型剥离);改完内核后跑 `pnpm run test` 即可。
 
 `build.mjs` 支持 `--no-minify` 一个参数,关闭 esbuild 的行压缩。压缩后的产物体积明显更小,分发时建议保持默认压缩。
 
@@ -190,7 +210,10 @@ dist/
 ```json
 "dsc": {
   "engines": "^1.0.0",
-  "description": { "zh-CN": "把文本改写得更自然、更像真人书写", "en-US": "Rewrite text so it reads more naturally and human" },
+  "description": {
+    "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面与资产格式尚未定稿",
+    "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI and asset format are not final"
+  },
   "home_page": "https://github.com/omds-chat/dsc-humanize",
   "repo_link": "https://github.com/omds-chat/dsc-humanize"
 }
@@ -330,7 +353,7 @@ cp .env.example .env
 
 `net:fetch` 仅内置插件可申请,第三方插件在清单里写它会被拒绝。
 
-本插件当前申请 `events:session` 与 `notify` 两项能力,只订阅 `session:changed` 一个贡献点;实现改写功能时按需增补,不要一次性申请用不到的能力。
+本插件当前申请 `events:session` 与 `notify` 两项能力,只订阅 `session:changed` 一个贡献点;实现助手人性化与资产编辑时按需增补,不要一次性申请用不到的能力。
 
 ## 发布
 
