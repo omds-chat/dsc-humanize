@@ -2,10 +2,11 @@ import { readAssetContents } from '../humanize/assets/loader.js'
 import type { AssetContents } from '../humanize/types.js'
 
 /**
- * 当前使用快照在插件存储里的键名。
+ * 过渡快照在插件存储里的旧键名,仅用于一次性迁移。
  *
- * 形状与键名按 docs/design/kernel-and-assets.md 4.6 的过渡约定先定一版,标注为可调整:
- * 快照介质的目标仍是 IndexedDB,这条读取路径只解决「激活时有一份可装配的内容」。
+ * 快照的常规读写已改走 IndexedDB(见 4.6 的已定结论与初版实现);
+ * 激活时 IndexedDB 里没有记录时读这个旧键,搬进 IndexedDB 后删除,
+ * 之后插件存储不再是快照的常规读写通道。
  */
 export const SNAPSHOT_STORAGE_KEY = 'dsc-humanize/snapshot/v1'
 
@@ -46,9 +47,9 @@ export const createSnapshot = (contents: AssetContents): ActiveSnapshot => ({
 })
 
 /**
- * 读取插件存储里的快照。
+ * 读取一份快照记录(来自 IndexedDB 或迁移前的插件存储)。
  *
- * 存储里的值可能来自旧版本或被外部改写,这里只接受约定的版本与形状:
+ * 记录可能来自旧版本或被外部改写,这里只接受约定的版本与形状:
  * 版本不支持、内容不合法都整份拒绝,调用方据此保持空内容,不做部分保留。
  */
 export const readActiveSnapshot = (value: unknown): SnapshotReadResult => {

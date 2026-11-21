@@ -115,20 +115,19 @@ const reset = (): void => {
   setActiveContents({})
 }
 
-test('activate: 申请 chat:request 并注册请求前处理器', () => {
+test('activate: 申请 chat:request 并注册请求前处理器', async () => {
   reset()
   const fake = createFakeContext()
-
-  activate(fake.context)
+  await activate(fake.context)
 
   assert.equal(fake.handlers.length, 1)
   assert.deepEqual(fake.eventPoints, ['session:changed'])
 })
 
-test('请求前处理器: 有标签集与策略表时返回宿主补丁', () => {
+test('请求前处理器: 有标签集与策略表时返回宿主补丁', async () => {
   reset()
   const fake = createFakeContext()
-  activate(fake.context)
+  await activate(fake.context)
   setActiveContents(contentsWithAssets())
 
   const handler = fake.handlers[0]
@@ -156,10 +155,10 @@ test('请求前处理器: 有标签集与策略表时返回宿主补丁', () => 
   ])
 })
 
-test('请求前处理器: 没有资产时返回 null,不改请求', () => {
+test('请求前处理器: 没有资产时返回 null,不改请求', async () => {
   reset()
   const fake = createFakeContext()
-  activate(fake.context)
+  await activate(fake.context)
 
   const handler = fake.handlers[0]
   assert.ok(handler !== undefined)
@@ -167,10 +166,10 @@ test('请求前处理器: 没有资产时返回 null,不改请求', () => {
   assert.ok(fake.logs.some((message) => message.includes('没有标签集或策略表')))
 })
 
-test('请求前处理器: 只有标签集没有策略表时返回 null', () => {
+test('请求前处理器: 只有标签集没有策略表时返回 null', async () => {
   reset()
   const fake = createFakeContext()
-  activate(fake.context)
+  await activate(fake.context)
   setActiveContents(contentsWithoutStrategies())
 
   const handler = fake.handlers[0]
@@ -218,15 +217,15 @@ test('请求前处理器: 策略表给出多个条目时拒绝装配并返回 nu
   assert.ok(logs.some((message) => message.includes('策略表只能有一个条目')))
 })
 
-test('deactivate 后可以重新激活并重新注册处理器', () => {
+test('deactivate 后可以重新激活并重新注册处理器', async () => {
   reset()
 
   const first = createFakeContext()
-  activate(first.context)
+  await activate(first.context)
   deactivate()
 
   const second = createFakeContext()
-  activate(second.context)
+  await activate(second.context)
   setActiveContents(contentsWithAssets())
 
   assert.equal(first.handlers.length, 1)

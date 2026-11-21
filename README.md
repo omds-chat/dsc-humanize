@@ -18,9 +18,9 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 一套可校验的规范区:运行时规范、开发规范与 JSON Schema,随仓库保留用于本地校验
 - 一套内核骨架:意图分类、标签到策略的解析、提示词注入拼接与按类型读取的资产适配层,不依赖模型与宿主能力
 - 一套宿主请求前接线:申请 `chat:request` 能力并声明 `chat:before-request` 挂载点,把内核的策略与注入结果映射成宿主补丁
-- 一条本地资产交付路径:激活时从插件存储读取当前使用快照并装配,另有 `importAssetPackage` 从 JSON 文本导入资产包文档;快照键名与形状按设计文档 4.6 的过渡约定,标注为可调整
-- 一条根证书内嵌链路:构建时读取 `certs/dsc-humanize/dsc-humanize-root-ca.crt`,把 PEM 注入为产物常量,运行时导出 `EMBEDDED_ROOT_CA_PEM`;验签链路尚未实现
-- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产按类型读取与校验、快照装配与资产包导入、内核装配与请求前接线
+- 一条本地资产交付路径:激活时从 IndexedDB 读取当前使用快照并装配,并把插件存储里的过渡快照一次性迁入,另有 `importAssetPackage` 从 JSON 文本导入资产包文档;快照的库内约定按设计文档 4.6 的初版实现,标注为可调整
+- 一条根证书内嵌与链校验链路:构建时读取 `certs/dsc-humanize/dsc-humanize-root-ca.crt`,把 PEM 注入为产物常量,运行时导出 `EMBEDDED_ROOT_CA_PEM`;`importAssetPackage` 带来源证书时先用它做「根 → EEC」两级链校验,按两轴结论(签名结论 + 来源结论)降级来源结论、不阻断导入
+- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产按类型读取与校验、IndexedDB 快照封装、快照装配与一次性迁移、资产包导入、证书链校验与导入两轴结论、内核装配与请求前接线
 
 内核通过宿主的请求前能力落到请求上:有资产时按策略改写请求参数与系统提示词,没有资产时请求保持原样。插件同时记录会话切换,并在首次激活时用宿主文案键提示一次。
 
@@ -34,15 +34,16 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 | 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 按包元数据的类型声明读取,声明与内容双向一致;本地数据可用,URL 只留读取通道接口,内核不发请求 |
 | 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 按类型取来源,串起分类、策略与注入,产出一次规划与来源记录 |
 | 宿主请求接线 | [src/host/request-patch.ts](src/host/request-patch.ts) | 申请能力 `chat:request` 并声明挂载点 `chat:before-request`,把分类、策略与注入结果映射为宿主补丁;没有标签集或策略表、分类器抛错时返回 `null`,不改请求 |
-| 资产交付 | [src/host/snapshot.ts](src/host/snapshot.ts)、[src/index.ts](src/index.ts) | 激活时读取插件存储里的当前使用快照并装配,`importAssetPackage` 从 JSON 文本导入资产包文档;没有快照或快照不合法时保持空内容,键名与形状按 4.6 的过渡约定,可调整 |
-| 根证书内嵌 | [src/trust/root-ca.ts](src/trust/root-ca.ts)、[build.mjs](build.mjs) | 构建时读取公开根证书并注入产物常量,运行时导出 PEM;只内嵌公开证书,验签链路未实现 |
+| 资产交付 | [src/host/snapshot.ts](src/host/snapshot.ts)、[src/host/snapshot-db.ts](src/host/snapshot-db.ts)、[src/index.ts](src/index.ts) | 激活时读取 IndexedDB 里的当前使用快照并装配,一次性迁移插件存储里的过渡快照,`importAssetPackage` 从 JSON 文本导入资产包文档;没有快照或快照不合法时保持空内容,库内约定按 4.6 的初版实现,可调整 |
+| 根证书内嵌 | [src/trust/root-ca.ts](src/trust/root-ca.ts)、[build.mjs](build.mjs) | 构建时读取公开根证书并注入产物常量,运行时导出 PEM;只内嵌公开证书 |
+| 证书链校验 | [src/trust/x509.ts](src/trust/x509.ts)、[src/trust/source-verdict.ts](src/trust/source-verdict.ts) | 零依赖 DER 解析加 WebCrypto 验签:导入带来源证书时先做「根 → EEC」两级链校验并比对证书主题 CN 与包标识,给出签名结论与来源结论;链不过只降级来源结论、不阻断导入 |
 | 资产编辑界面 | 尚未实现(导入入口已可用) | 插件还没有界面入口,资产的输入、编辑与导出未落地;导入可先把 JSON 文本交给 `importAssetPackage` |
 | 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 格式由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0);内核按类型读取与导入已实现,导出与编辑界面未实现 |
 
 - 内核只做纯计算:输出意图、策略、提示词片段与来源记录,不写回任何请求,也不读写宿主状态;落地由宿主请求接线完成。
 - 宿主请求能力已具备(`chat:request`):清单同时声明挂载点 `chat:before-request`,激活时登记处理器;处理器同步返回 `temperature`、`topP`、`maxTokens`、`stop` 与 `systemPromptAppend`,数值与文本长度不在插件里裁剪,越界由引擎按补丁上限收敛;超时或抛错时整份补丁作废,请求按原参数发出。
 - 与 dsc-llm-tune 互斥:两者都改写同一次请求的参数,不能同时启用;清单声明 `conflicts: ['dsc-llm-tune']`,同时安装会被宿主拒绝。职责互补但不并存:本插件按资产给预设,dsc-llm-tune 让用户自由调节参数,详见下文「与 dsc-llm-tune 互斥」。
-- 资产装载入口:`setActiveContents` 按类型接收当前使用的内容,形状与内核装配参数一致。插件激活时还会从插件存储读取当前使用快照(键 `dsc-humanize/snapshot/v1`,形状见设计文档 4.6,标注为可调整),校验通过后装配;没有快照或快照不合法时保持空内容,插件不改请求。`importAssetPackage` 从 JSON 文本导入一份加载期资产包文档,成功才整体替换当前内容,并在已激活时写回快照;资产的编辑界面与导出仍未实现。
+- 资产装载入口:`setActiveContents` 按类型接收当前使用的内容,形状与内核装配参数一致。插件激活时从 IndexedDB 读取当前使用快照(库 `dsc-humanize`、对象仓库 `snapshot`、记录键 `active`,形状见设计文档 4.6 的初版约定),校验通过后装配;没有快照或快照不合法时保持空内容,插件不改请求。激活时若 IndexedDB 里没有记录,会把插件存储里的过渡快照(旧键 `dsc-humanize/snapshot/v1`)一次性迁入并删除旧键,迁移失败不阻断激活。`importAssetPackage` 从 JSON 文本导入一份加载期资产包文档,成功才整体替换当前内容,并在已激活且 IndexedDB 可用时写回快照(上限 2 MB,超限或写入失败只影响持久化,不影响本次装配);导入可带来源证书(`sourceCertPem`),带证书时先做「根 → EEC」链校验并返回两轴结论,链不过只把来源结论降级为未通过,不阻断导入;资产的编辑界面与导出仍未实现。
 - 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),内核按包元数据的类型声明读取,声明与实际内容双向一致;导入入口已可用(JSON 文本交给 `importAssetPackage`),导出与编辑界面尚未实现,`dsc-humanize-inner-asset` 的预设包仍需先转成加载期包文档才能导入。
 - 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导出都还没有落地;导入已可用,但需要调用方提供 JSON 文本。
 - 自检覆盖类型、构建、规范、内核纯函数与请求前接线:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
@@ -91,13 +92,16 @@ dsc-humanize/
 ├── scripts/
 │   ├── test/                 # 内核纯函数测试,node:test 运行
 │   │   ├── ts-hooks.mjs      # 让测试直接加载 .ts 源码的解析钩子
-│   │   ├── asset-delivery.test.ts # 快照装配与资产包导入
+│   │   ├── asset-delivery.test.ts # 快照装配、一次性迁移与资产包导入
 │   │   ├── asset-loader.test.ts
+│   │   ├── fake-idb.ts        # 测试用的假 IndexedDB 替身
 │   │   ├── host-wiring.test.ts # 宿主请求前接线
 │   │   ├── injection-builder.test.ts
 │   │   ├── kernel.test.ts
 │   │   ├── rule-classifier.test.ts
-│   │   └── strategy-engine.test.ts
+│   │   ├── snapshot-db.test.ts # IndexedDB 快照封装
+│   │   ├── strategy-engine.test.ts
+│   │   └── trust-chain.test.ts # 证书链校验与导入两轴结论
 │   └── validate-specs.mjs    # 零依赖规范校验脚本
 ├── specs/
 │   ├── README.md             # 规范区索引与已知差异
@@ -111,9 +115,12 @@ dsc-humanize/
 │   ├── types.ts              # 契约类型
 │   ├── host/
 │   │   ├── request-patch.ts  # 宿主请求前接线:策略与注入 -> 请求补丁
-│   │   └── snapshot.ts       # 当前使用快照:键名、形状与读取校验
+│   │   ├── snapshot-db.ts    # 当前使用快照的 IndexedDB 封装:库名、仓库与读写
+│   │   └── snapshot.ts       # 当前使用快照:形状、版本与读取校验,含过渡快照旧键
 │   ├── trust/
-│   │   └── root-ca.ts        # 内嵌的资产根证书 PEM 常量
+│   │   ├── root-ca.ts        # 内嵌的资产根证书 PEM 常量
+│   │   ├── x509.ts           # 零依赖 X.509 解析与 WebCrypto 链校验
+│   │   └── source-verdict.ts # 导入路径的两轴结论:签名结论 + 来源结论
 │   └── humanize/             # 内核骨架,不接宿主
 │       ├── index.ts          # 内核对外出口
 │       ├── kernel.ts         # 内核装配:分类 -> 策略 -> 注入
@@ -137,12 +144,12 @@ dsc-humanize/
 | `src/index.ts` | 激活与停用入口,快照装配与资产包导入 |
 | `src/manifest.ts` | 插件运行时清单,产物继续导出 |
 | `src/host/` | 宿主请求接线与资产交付:申请 `chat:request` 把内核结果映射成宿主补丁;读取当前使用快照 |
-| `src/trust/` | 内嵌的资产根证书常量,构建时注入 |
+| `src/trust/` | 内嵌的资产根证书常量与来源证书链校验:零依赖 DER 解析、WebCrypto 验签与导入两轴结论 |
 | `src/humanize/` | 内核骨架:意图分类、策略引擎、注入构建与资产加载,不读写宿主 |
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
 | `schemas/runtime/` | 运行时 meta 的 JSON Schema,构建自校验覆盖其中的必填与格式规则 |
 | `scripts/validate-specs.mjs` | 零依赖校验脚本,校验 Schema、样例与本仓库 meta |
-| `scripts/test/` | 测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、快照装配与资产包导入、内核装配、宿主请求前接线 |
+| `scripts/test/` | 测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、快照装配与资产包导入、证书链校验、内核装配、宿主请求前接线 |
 | `specs/` | 规范区:运行时规范、开发规范与版本信息 |
 | `.env.example` | 环境变量模板 |
 
@@ -392,7 +399,7 @@ cp .env.example .env
 
 `net:fetch` 仅内置插件可申请,第三方插件在清单里写它会被拒绝。
 
-本插件当前申请 `events:session`、`notify`、`plugins:storage` 与 `chat:request` 四项能力,声明 `session:changed` 与 `chat:before-request` 两个挂载点;其中 `plugins:storage` 用于读取当前使用快照,不申请用不到的能力。
+本插件当前申请 `events:session`、`notify`、`plugins:storage` 与 `chat:request` 四项能力,声明 `session:changed` 与 `chat:before-request` 两个挂载点;其中 `plugins:storage` 用于一次性迁移插件存储里的过渡快照(迁出后不再使用),不申请用不到的能力。
 
 ## 发布
 

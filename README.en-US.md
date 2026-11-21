@@ -18,9 +18,9 @@ The project skeleton comes from dsc-plugin-template: source in TypeScript, bundl
 - a set of checkable specs: the runtime spec, the development spec and their JSON Schemas, kept in this repository for local validation
 - a kernel skeleton: intent classification, label-to-strategy resolution, prompt injection assembly and an adapter that reads assets by type, depending on neither a model nor a host capability
 - a host request hook: applies for the `chat:request` capability and declares the `chat:before-request` mount point, mapping the kernel's strategy and injection result onto a host patch
-- a local asset delivery path: activation reads the active-usage snapshot from plugin storage and assembles it, and `importAssetPackage` imports an asset package document from JSON text; the snapshot key and shape follow the interim convention in design doc 4.6 and are marked adjustable
-- a root certificate embedding path: the build reads `certs/dsc-humanize/dsc-humanize-root-ca.crt` and injects the PEM as an artifact constant, exported at runtime as `EMBEDDED_ROOT_CA_PEM`; chain verification is not implemented yet
-- a dependency-free test suite: Node `node:test` covers scoring, strategy merging, injection assembly, reading and validating assets by type, snapshot assembly and package import, kernel assembly and the request hook
+- a local asset delivery path: activation reads the active-usage snapshot from IndexedDB and assembles it, migrating the interim snapshot from plugin storage once, and `importAssetPackage` imports an asset package document from JSON text; the in-database conventions follow the initial implementation in design doc 4.6 and are marked adjustable
+- a root certificate embedding and chain verification path: the build reads `certs/dsc-humanize/dsc-humanize-root-ca.crt` and injects the PEM as an artifact constant, exported at runtime as `EMBEDDED_ROOT_CA_PEM`; when `importAssetPackage` is given a source certificate it first verifies the two-level root-to-EEC chain and reports the two-axis verdict (signature verdict plus source verdict), degrading the source verdict without blocking the import
+- a dependency-free test suite: Node `node:test` covers scoring, strategy merging, injection assembly, reading and validating assets by type, the IndexedDB snapshot wrapper, snapshot assembly with one-time migration, package import, certificate chain verification and the import trust verdict, kernel assembly and the request hook
 
 The kernel lands on requests through the host before-request capability: with assets it rewrites request parameters and the system prompt, and without assets the request stays unchanged. The plugin also logs session switches and shows one install notice through a host message key.
 
@@ -34,15 +34,16 @@ The kernel lands on requests through the host before-request capability: with as
 | Asset loading | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | Reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways; local data works, a URL is only a read transport interface and the kernel sends no request |
 | Kernel assembly | [src/humanize/kernel.ts](src/humanize/kernel.ts) | Takes one source per type and wires classification, strategy and injection into one plan with source records |
 | Host request hook | [src/host/request-patch.ts](src/host/request-patch.ts) | Applies for the `chat:request` capability, declares the `chat:before-request` mount point, and maps classification, strategy and injection onto a host patch; returns `null` without a label set or strategy table, or when the classifier throws |
-| Asset delivery | [src/host/snapshot.ts](src/host/snapshot.ts), [src/index.ts](src/index.ts) | Activation reads the active-usage snapshot from plugin storage and assembles it; `importAssetPackage` imports an asset package document from JSON text; with no snapshot or an invalid one the content stays empty; the key and shape follow the interim convention in 4.6 and are adjustable |
-| Root certificate embedding | [src/trust/root-ca.ts](src/trust/root-ca.ts), [build.mjs](build.mjs) | The build reads the public root certificate and injects it as an artifact constant, exported as PEM at runtime; only the public certificate is embedded and chain verification is not implemented |
+| Asset delivery | [src/host/snapshot.ts](src/host/snapshot.ts), [src/host/snapshot-db.ts](src/host/snapshot-db.ts), [src/index.ts](src/index.ts) | Activation reads the active-usage snapshot from IndexedDB and assembles it, migrating the interim plugin-storage snapshot once; `importAssetPackage` imports an asset package document from JSON text; with no snapshot or an invalid one the content stays empty; the in-database conventions follow the initial implementation in 4.6 and are adjustable |
+| Root certificate embedding | [src/trust/root-ca.ts](src/trust/root-ca.ts), [build.mjs](build.mjs) | The build reads the public root certificate and injects it as an artifact constant, exported as PEM at runtime; only the public certificate is embedded |
+| Certificate chain verification | [src/trust/x509.ts](src/trust/x509.ts), [src/trust/source-verdict.ts](src/trust/source-verdict.ts) | Dependency-free DER parsing plus WebCrypto signature verification: an import that carries a source certificate first verifies the two-level root-to-EEC chain and compares the certificate subject CN with the package id, then reports the signature and source verdicts; a failing chain only degrades the source verdict and never blocks the import |
 | Asset editing UI | not implemented (the import entry is usable) | The plugin has no interface entry yet, so entering, editing and exporting assets are pending; import can go through `importAssetPackage` with JSON text |
 | Asset bundle format | [src/humanize/types.ts](src/humanize/types.ts) | Defined by `dsc-humanize-asset-template` (format version 1.0.0); reading by type and import are implemented, while export and the editing UI are not |
 
 - The kernel is pure computation: it returns the intent, the strategy, prompt fragments and source records, and never writes back to a request or reads host state; landing on a request belongs to the host request hook.
 - The host request capability is available (`chat:request`): the manifest also declares the `chat:before-request` mount point, and activation registers a handler. The handler returns `temperature`, `topP`, `maxTokens`, `stop` and `systemPromptAppend` synchronously; numbers and text lengths are not clamped in the plugin, out-of-range values are converged by the engine against the patch limits; on timeout or a throw the whole patch is dropped and the request goes out with its original parameters.
 - Exclusion with dsc-llm-tune: both rewrite the parameters of the same request, so they cannot be enabled together; the manifest declares `conflicts: ['dsc-llm-tune']` and installing both is rejected by the host. The division of labour is complementary but the two do not coexist: this plugin applies presets from assets, dsc-llm-tune lets the user tune parameters freely; see "Exclusion with dsc-llm-tune" below.
-- Asset loading entry: `setActiveContents` takes the content currently in use by type, in the same shape as the kernel assembly options. On activation the plugin also reads the active-usage snapshot from plugin storage (key `dsc-humanize/snapshot/v1`, shape in design doc 4.6, marked adjustable) and assembles it once it validates; with no snapshot or an invalid one the content stays empty and requests are left unchanged. `importAssetPackage` imports a load-time asset package document from JSON text, replaces the current content only after the whole package validates, and writes the snapshot back when the plugin is active; the editing UI and export are still pending.
+- Asset loading entry: `setActiveContents` takes the content currently in use by type, in the same shape as the kernel assembly options. On activation the plugin reads the active-usage snapshot from IndexedDB (database `dsc-humanize`, object store `snapshot`, record key `active`, shape in the initial convention of design doc 4.6) and assembles it once it validates; with no snapshot or an invalid one the content stays empty and requests are left unchanged. When IndexedDB holds no record, the interim plugin-storage snapshot (legacy key `dsc-humanize/snapshot/v1`) is migrated into IndexedDB once and the legacy key is removed; a failed migration does not block activation. `importAssetPackage` imports a load-time asset package document from JSON text, replaces the current content only after the whole package validates, and writes the snapshot back when the plugin is active and IndexedDB is available (2 MB size limit; exceeding the limit or a failed write only affects persistence, not the current assembly); the import may carry a source certificate (`sourceCertPem`), in which case the root-to-EEC chain is verified first and the two-axis verdict is returned — a failing chain only degrades the source verdict to rejected and does not block the import; the editing UI and export are still pending.
 - The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0); the kernel reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways. The import entry is usable (JSON text through `importAssetPackage`), while export and the editing UI are not built yet, so the preset packages from `dsc-humanize-inner-asset` still need converting into a load-time package document before import.
 - The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one export of humanization assets are pending; import is usable, but the caller has to supply JSON text.
 - Self-checks cover types, the build, the specs, the kernel pure functions and the request hook: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
@@ -91,13 +92,16 @@ dsc-humanize/
 ├── scripts/
 │   ├── test/                 # kernel pure-function tests, run by node:test
 │   │   ├── ts-hooks.mjs      # resolve hook so the tests load .ts source directly
-│   │   ├── asset-delivery.test.ts # snapshot assembly and asset package import
+│   │   ├── asset-delivery.test.ts # snapshot assembly, one-time migration and package import
 │   │   ├── asset-loader.test.ts
+│   │   ├── fake-idb.ts        # fake IndexedDB test double
 │   │   ├── host-wiring.test.ts # request hook wiring
 │   │   ├── injection-builder.test.ts
 │   │   ├── kernel.test.ts
 │   │   ├── rule-classifier.test.ts
-│   │   └── strategy-engine.test.ts
+│   │   ├── snapshot-db.test.ts # IndexedDB snapshot wrapper
+│   │   ├── strategy-engine.test.ts
+│   │   └── trust-chain.test.ts # certificate chain verification and the import trust verdict
 │   └── validate-specs.mjs    # dependency-free spec validator
 ├── specs/
 │   ├── README.md             # spec area index and known differences
@@ -111,9 +115,12 @@ dsc-humanize/
 │   ├── types.ts              # contract types
 │   ├── host/
 │   │   ├── request-patch.ts  # request hook: strategy and injection -> patch
-│   │   └── snapshot.ts       # active-usage snapshot: key, shape and validation
+│   │   ├── snapshot-db.ts    # IndexedDB wrapper for the active-usage snapshot: database, store, read and write
+│   │   └── snapshot.ts       # active-usage snapshot: shape, version and validation, plus the legacy interim key
 │   ├── trust/
-│   │   └── root-ca.ts        # embedded asset root certificate PEM constant
+│   │   ├── root-ca.ts        # embedded asset root certificate PEM constant
+│   │   ├── x509.ts           # dependency-free X.509 parsing and WebCrypto chain verification
+│   │   └── source-verdict.ts # import trust verdicts: signature verdict plus source verdict
 │   └── humanize/             # kernel skeleton, not wired to the host
 │       ├── index.ts          # kernel public surface
 │       ├── kernel.ts         # kernel assembly: classify -> strategy -> inject
@@ -136,13 +143,13 @@ dsc-humanize/
 | `package.json` | Project metadata and the source of `meta.json` |
 | `src/index.ts` | Activation and deactivation entry points, snapshot assembly and package import |
 | `src/manifest.ts` | Runtime manifest, still exported by the output |
-| `src/host/` | Request hook and asset delivery: applies for `chat:request` and maps kernel results onto a host patch; reads the active-usage snapshot |
-| `src/trust/` | Embedded asset root certificate constant, injected at build time |
+| `src/host/` | Request hook and asset delivery: applies for `chat:request` and maps kernel results onto a host patch; reads the active-usage snapshot from IndexedDB and migrates the interim plugin-storage snapshot once |
+| `src/trust/` | Embedded asset root certificate constant plus source certificate chain verification: dependency-free DER parsing, WebCrypto signature verification and the import trust verdicts |
 | `src/humanize/` | Kernel skeleton: intent classification, strategy engine, injection assembly and asset loading; it never reads or writes host state |
 | `schemas/manifest/` | Manifest JSON Schema, aligned with the host manifest checks |
 | `schemas/runtime/` | JSON Schema for the runtime meta; the build self-validation covers its required and format rules |
 | `scripts/validate-specs.mjs` | Dependency-free validator for the schemas, samples and this repository meta |
-| `scripts/test/` | Tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, snapshot assembly and package import, kernel assembly, request hook wiring |
+| `scripts/test/` | Tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, the IndexedDB snapshot wrapper, snapshot assembly and one-time migration, package import, certificate chain verification, kernel assembly, request hook wiring |
 | `specs/` | Spec area: runtime spec, development spec, version info |
 | `.env.example` | Environment template |
 
@@ -392,7 +399,7 @@ The two are complementary but do not coexist: use this plugin when you want a sh
 
 `net:fetch` is available to built-in plugins only; a third-party manifest that requests it is rejected.
 
-This plugin currently requests `events:session`, `notify`, `plugins:storage` and `chat:request`, and declares `session:changed` and `chat:before-request`; `plugins:storage` is used to read the active-usage snapshot, and it never requests a capability it does not use.
+This plugin currently requests `events:session`, `notify`, `plugins:storage` and `chat:request`, and declares `session:changed` and `chat:before-request`; `plugins:storage` is used for the one-time migration of the interim plugin-storage snapshot (no longer used after migration), and it never requests a capability it does not use.
 
 ## Publishing
 
