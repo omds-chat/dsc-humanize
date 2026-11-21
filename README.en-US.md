@@ -16,8 +16,8 @@ The project skeleton comes from dsc-plugin-template: source in TypeScript, bundl
 - an optional author signing step that writes `plugin.js.author.sig` with openssl
 - LF line endings on every text output, with minification on by default
 - a set of checkable specs: the runtime spec, the development spec and their JSON Schemas, kept in this repository for local validation
-- a kernel skeleton: intent classification, label-to-strategy resolution, prompt injection assembly and an asset loading adapter, depending on neither a model nor a host capability
-- a dependency-free kernel test suite: Node `node:test` covers scoring, strategy merging, injection assembly, asset validation and loading, and kernel assembly
+- a kernel skeleton: intent classification, label-to-strategy resolution, prompt injection assembly and an adapter that reads assets by type, depending on neither a model nor a host capability
+- a dependency-free kernel test suite: Node `node:test` covers scoring, strategy merging, injection assembly, reading and validating assets by type, and kernel assembly
 
 This round lands the kernel skeleton, and humanizing the assistant is still inactive: at runtime the plugin only subscribes to the session switch event, writes to the plugin log, and shows one notice through a host message key, which is enough to confirm that the host loads and runs it.
 
@@ -27,15 +27,15 @@ This round lands the kernel skeleton, and humanizing the assistant is still inac
 |:---:|:---:|:---:|
 | Intent classification | [src/humanize/intent/rule-classifier.ts](src/humanize/intent/rule-classifier.ts) | The classifier interface and a rule/keyword implementation are usable; the ONNX implementation is interface plus TODO only, with no dependency added and no model downloaded |
 | Strategy engine | [src/humanize/strategy/engine.ts](src/humanize/strategy/engine.ts) | Label-to-strategy merging and validation work; every strategy comes from assets, the kernel ships none |
-| Injection assembly | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | Pure function: joins the persona prefix and the injection text, deduplicates, and places the result |
-| Asset loading | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | Local data works; a URL is only a read transport interface and the kernel sends no request |
-| Kernel assembly | [src/humanize/kernel.ts](src/humanize/kernel.ts) | Wires classification, strategy and injection into one plan |
+| Injection assembly | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | Pure function: joins the persona prefix, the strategy injection text and the injection-type fragments, deduplicates, and places the result |
+| Asset loading | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | Reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways; local data works, a URL is only a read transport interface and the kernel sends no request |
+| Kernel assembly | [src/humanize/kernel.ts](src/humanize/kernel.ts) | Takes one source per type and wires classification, strategy and injection into one plan with source records |
 | Asset editing UI | not implemented | The plugin has no interface entry yet, so entering, editing, importing and exporting assets are all pending |
-| Asset bundle format | [src/humanize/types.ts](src/humanize/types.ts) | Not final: a standard `dsc-humanize-asset` bundle currently fixes only the fields the kernel reads |
+| Asset bundle format | [src/humanize/types.ts](src/humanize/types.ts) | Defined by `dsc-humanize-asset-template` (format version 1.0.0); reading by type is implemented, while import/export and the editing UI are not |
 
-- The kernel is pure computation: it returns the intent, the strategy and prompt fragments, and never writes back to a request or reads host state.
+- The kernel is pure computation: it returns the intent, the strategy, prompt fragments and source records, and never writes back to a request or reads host state.
 - Host capability is pending: dsc-plugin-engine has no entry point for changing request parameters or the system prompt, so the kernel only produces a strategy. Any new capability is evaluated in the main repository; this repository assumes no interface.
-- The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0), but the kernel's `AssetBundle` is still a whole-package structure; reading by type and the import/export path are not built yet, so the preset packages from `dsc-humanize-inner-asset` cannot be wired up until the kernel catches up.
+- The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0); the kernel reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways. The import/export path and the editing UI are not built yet, so the preset packages from `dsc-humanize-inner-asset` cannot be wired up until the import path lands.
 - The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one import/export of humanization assets are all pending; the kernel only offers pure classification, strategy and injection computation.
 - The host is not wired yet: activation only logs the kernel version, loads no real asset and consumes no host data.
 - Self-checks cover types, the build, the specs and the kernel pure functions: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
@@ -125,7 +125,7 @@ dsc-humanize/
 | `schemas/manifest/` | Manifest JSON Schema, aligned with the host manifest checks |
 | `schemas/runtime/` | JSON Schema for the runtime meta; the build self-validation covers its required and format rules |
 | `scripts/validate-specs.mjs` | Dependency-free validator for the schemas, samples and this repository meta |
-| `scripts/test/` | Kernel pure-function tests: scoring and ordering, strategy validation and merging, injection assembly, asset validation and loading, kernel assembly |
+| `scripts/test/` | Kernel pure-function tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, kernel assembly |
 | `specs/` | Spec area: runtime spec, development spec, version info |
 | `.env.example` | Environment template |
 

@@ -93,14 +93,14 @@ const validateStrategy = (strategy: HumanizeStrategy, at: string): string[] => {
 export const validateStrategyTable = (table: StrategyTable): string[] => {
   const problems: string[] = []
 
+  if (table.id.trim() === '') problems.push('strategies.id 不能为空')
   if (table.version.trim() === '') problems.push('strategies.version 不能为空')
 
   if (table.base !== undefined) {
     for (const problem of validateStrategy(table.base, 'strategies.base')) problems.push(problem)
   }
 
-  if (table.rules.length === 0) problems.push('strategies.rules 不能为空')
-
+  // 规则数组允许为空:此时只有兜底策略,与资产包格式规范 7.3 一致
   table.rules.forEach((rule, index) => {
     const at = 'strategies.rules[' + index + ']'
 

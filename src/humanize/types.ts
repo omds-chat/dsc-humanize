@@ -91,6 +91,8 @@ export interface StrategyRule {
 
 /** 策略表,由资产包提供;内核不内置任何具体策略 */
 export interface StrategyTable {
+  /** 策略表标识,同一来源内唯一;进入来源记录,便于回答用的是哪一份 */
+  id: string
   /** 策略表版本,进入解析结果便于审计 */
   version: string
   /** 兜底策略,先于所有规则合并 */
@@ -126,6 +128,8 @@ export interface InjectionInput {
   personaPrefix?: string
   /** 策略给出的注入文本 */
   injection?: string
+  /** 注入文本类资产给出的片段,按数组顺序接在策略注入文本之后 */
+  fragments?: readonly string[]
   /** 已有的系统提示词,可为空 */
   existingPrompt?: string
   /** 缺省 append */
@@ -150,7 +154,16 @@ export interface InjectionResult {
   dropped: readonly DroppedFragment[]
 }
 
-/* ---------- 资产 ---------- */
+/* ---------- 资产:内容与来源 ---------- */
+
+/**
+ * 四类内容的标识,顺序与资产包格式规范 3.1 一致。
+ * 类型集合固定:每一类对应内核里一处装配点,扩展类型属内核版本变更。
+ */
+export const CONTENT_TYPES = ['persona', 'labels', 'strategies', 'injection'] as const
+
+/** 内容类型标识:人物设定、分类标签集、策略规则、注入文本 */
+export type ContentType = (typeof CONTENT_TYPES)[number]
 
 /** 人物设定,属于人性化资产 */
 export interface PersonaProfile {
@@ -158,14 +171,77 @@ export interface PersonaProfile {
   name: string
   /** 拼在提示词前的固定文本 */
   prefix: string
+  /** 语义说明,资产可以不提供 */
+  description?: string
 }
 
-/** 资产包的最小结构;格式待定,当前只约定读取所需字段 */
-export interface AssetBundle {
-  schemaVersion: string
-  labels: readonly LabelDefinition[]
-  strategies: StrategyTable
-  persona?: PersonaProfile
+/** 注入文本,属于人性化资产;装配时并入注入环节 */
+export interface InjectionFragment {
+  id: string
+  name: string
+  /** 注入到系统提示词的文本 */
+  text: string
+  /** 语义说明,资产可以不提供 */
+  description?: string
+}
+
+/**
+ * 来源标识。
+ * 资产包用包的标识与版本;用户自写内容由调用方给一个标识,内核不解释标识的含义。
+ */
+export interface AssetSourceRef {
+  id: string
+  /** 来源版本;用户自写内容可以不填 */
+  version?: string
+}
+
+/**
+ * 某一类内容的一份来源:来源标识加上该类型的条目。
+ * 每类是一个集合,允许为空;来源与条目一起保存,装配结果据此回答「这段内容从哪来」。
+ */
+export interface AssetContent<TItem> {
+  source: AssetSourceRef
+  items: readonly TItem[]
+}
+
+/**
+ * 按类型划分的资产内容。
+ * 出现键表示这一类有来源,缺键表示这一类没有内容;四类可以来自不同的来源,由调用方选定。
+ */
+export interface AssetContents {
+  persona?: AssetContent<PersonaProfile>
+  labels?: AssetContent<LabelDefinition>
+  strategies?: AssetContent<StrategyTable>
+  injection?: AssetContent<InjectionFragment>
+}
+
+/**
+ * 加载后的资产包:元数据收敛为来源标识与版本,内容按类型分组。
+ * 只含包声明的类型;声明与内容的一致性由加载层保证。
+ */
+export interface AssetPackage {
+  /** 包的格式版本,原样保留 */
+  formatVersion: string
+  /** 包标识与包版本,即包内各类型条目的来源 */
+  source: AssetSourceRef
+  /** 包声明的类型,保持元数据里的顺序 */
+  types: readonly ContentType[]
+  contents: AssetContents
+}
+
+/**
+ * 加载期的包文档。
+ *
+ * 资产包在磁盘上是一个目录:asset.json 加若干已声明的类型目录,一个文件一项内容。
+ * 内核只接受一次读取能拿到的文本,因此由调用方把目录扁平化成一份文档:
+ * asset.json 原样放进 metadata,类型目录下的条目按类型分组成数组放进 contents。
+ * 目录形态是格式的权威形态,这份文档只解决「一次读取拿到整包」的问题。
+ */
+export interface AssetPackageDocument {
+  /** 资产包的 asset.json 内容 */
+  metadata: unknown
+  /** 类型标识到该类型条目数组的映射;缺键表示包里没有这一类 */
+  contents?: unknown
 }
 
 /** 资产引用:URL 或已解析的本地数据 */
@@ -204,7 +280,7 @@ export interface AssetLoadError {
 
 /** 资产读取结果;不抛错,由调用方决定降级方式 */
 export type AssetLoadResult =
-  | { ok: true; bundle: AssetBundle }
+  | { ok: true; asset: AssetPackage }
   | { ok: false; error: AssetLoadError }
 
 /** 资产源 */
@@ -218,18 +294,29 @@ export interface AssetSource {
 /** 内核装配参数 */
 export interface HumanizeKernelOptions {
   classifier: IntentClassifier
-  /** 资产提供的标签集,分类器只能从中选择 */
-  labels: readonly LabelDefinition[]
-  strategyTable: StrategyTable
-  persona?: PersonaProfile
+  /**
+   * 按类型选定的资产内容:每一类给出一个来源与其中的条目。
+   * 来源由调用方选定,内核不设跨包优先级;缺键表示这一类没有内容。
+   */
+  contents: AssetContents
   position?: InjectionPosition
 }
 
-/** 一次规划的产物:意图、策略与注入片段,尚未落到任何请求上 */
+/** 装配结果里一类内容的来源记录 */
+export interface AssetAttribution {
+  type: ContentType
+  source: AssetSourceRef
+  /** 实际参与装配的条目标识 */
+  itemIds: readonly string[]
+}
+
+/** 一次规划的产物:意图、策略、注入片段与来源记录,尚未落到任何请求上 */
 export interface HumanizePlan {
   intent: IntentResult
   strategy: StrategyResolution
   injection: InjectionResult
+  /** 每一类参与装配的内容来自哪里,按 persona、labels、strategies、injection 排序 */
+  attribution: readonly AssetAttribution[]
 }
 
 /** 内核 */

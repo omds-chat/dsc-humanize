@@ -4,7 +4,7 @@ import type { ClassifyInput, IntentClassifier, IntentResult } from '../types.js'
 export interface OnnxClassifierOptions {
   /** 模型地址,由资产包或插件设置提供 */
   modelUrl: string
-  /** 模型对应的标签集版本,须与资产包一致 */
+  /** 模型对应的标签集版本,须与提供标签集的来源版本一致 */
   labelSetVersion: string
   /** 置信度阈值,缺省 0.3 */
   minConfidence?: number

@@ -16,8 +16,8 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 一条可选的作者签名链路:打开开关后用 openssl 对 `plugin.js` 生成 `.author.sig`
 - 文本产物强制 LF 换行,`plugin.js` 默认行压缩
 - 一套可校验的规范区:运行时规范、开发规范与 JSON Schema,随仓库保留用于本地校验
-- 一套内核骨架:意图分类、标签到策略的解析、提示词注入拼接与资产读取适配层,不依赖模型与宿主能力
-- 一套零依赖的内核测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产校验与加载、内核装配
+- 一套内核骨架:意图分类、标签到策略的解析、提示词注入拼接与按类型读取的资产适配层,不依赖模型与宿主能力
+- 一套零依赖的内核测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产按类型读取与校验、内核装配
 
 本轮的产物是内核骨架,助手人性化尚未生效:运行时仍只订阅会话切换事件、写插件日志、用宿主文案键提示一次,用来确认插件能在宿主中正常加载与运行。
 
@@ -27,15 +27,15 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 |:---:|:---:|:---:|
 | 意图分类 | [src/humanize/intent/rule-classifier.ts](src/humanize/intent/rule-classifier.ts) | 分类器接口与规则/关键词实现可用;ONNX 实现只有接口与 TODO,未引入依赖、未下载模型 |
 | 策略引擎 | [src/humanize/strategy/engine.ts](src/humanize/strategy/engine.ts) | 标签到策略的合并与校验可用,策略内容全部来自资产,内核不内置具体策略 |
-| 注入构建 | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | 纯函数:人设前缀与注入文本的拼接、去重与位置 |
-| 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 本地数据可用;URL 只留读取通道接口,内核不发请求 |
-| 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 串起分类、策略与注入,产出一次规划结果 |
+| 注入构建 | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | 纯函数:人设前缀、策略注入文本与注入类型片段的拼接、去重与位置 |
+| 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 按包元数据的类型声明读取,声明与内容双向一致;本地数据可用,URL 只留读取通道接口,内核不发请求 |
+| 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 按类型取来源,串起分类、策略与注入,产出一次规划与来源记录 |
 | 资产编辑界面 | 尚未实现 | 插件还没有界面入口,资产的输入、编辑与导入导出都未落地 |
-| 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 格式由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0);内核当前的读取方式仍是整包结构,按类型读取待实现 |
+| 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 格式由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0);内核按类型读取已实现,导入导出与编辑界面未实现 |
 
-- 内核只做纯计算:输出意图、策略与提示词片段,不写回任何请求,也不读写宿主状态。
+- 内核只做纯计算:输出意图、策略、提示词片段与来源记录,不写回任何请求,也不读写宿主状态。
 - 宿主能力待定:当前 dsc-plugin-engine 没有修改请求参数与系统提示词的入口,内核因此只产出策略;新增能力的评估放在主线仓库,本仓库不预先假设接口。
-- 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),但内核的 `AssetBundle` 仍是整包结构;按类型读取与导入导出尚未实现,`dsc-humanize-inner-asset` 的预设包要等内核改造后才能直接对接。
+- 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),内核按包元数据的类型声明读取,声明与实际内容双向一致;导入导出与编辑界面尚未实现,`dsc-humanize-inner-asset` 的预设包要等导入路径落地后才能直接对接。
 - 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导入导出都还没有落地,内核只提供分类、策略与注入的纯计算。
 - 未接入宿主:激活流程只记录内核版本,尚未装载真实资产,也不消费宿主数据。
 - 自检覆盖类型、构建、规范与内核纯函数:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
@@ -125,7 +125,7 @@ dsc-humanize/
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
 | `schemas/runtime/` | 运行时 meta 的 JSON Schema,构建自校验覆盖其中的必填与格式规则 |
 | `scripts/validate-specs.mjs` | 零依赖校验脚本,校验 Schema、样例与本仓库 meta |
-| `scripts/test/` | 内核纯函数测试:分类打分与排序、策略校验与合并、注入拼接、资产校验与加载、内核装配 |
+| `scripts/test/` | 内核纯函数测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、内核装配 |
 | `specs/` | 规范区:运行时规范、开发规范与版本信息 |
 | `.env.example` | 环境变量模板 |
 

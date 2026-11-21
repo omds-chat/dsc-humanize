@@ -108,3 +108,33 @@ test('buildInjection: 丢弃记录按处理顺序排列', () => {
   })
   assert.deepEqual(result.dropped.map((item) => item.reason), ['empty', 'already-present'])
 })
+
+test('buildInjection: 注入类型的片段接在策略注入文本之后', () => {
+  const result = buildInjection({
+    personaPrefix: 'You are calm.',
+    injection: 'Be polite.',
+    fragments: ['Be brief.', 'Ask first.'],
+    existingPrompt: 'Existing.',
+  })
+  assert.equal(result.prompt, 'Existing.\n\nYou are calm.\n\nBe polite.\n\nBe brief.\n\nAsk first.')
+  assert.equal(result.added, 4)
+})
+
+test('buildInjection: 片段集合为空时只拼接前面的内容', () => {
+  const result = buildInjection({
+    injection: 'Be polite.',
+    fragments: [],
+    existingPrompt: 'Existing.',
+  })
+  assert.equal(result.prompt, 'Existing.\n\nBe polite.')
+  assert.equal(result.added, 1)
+})
+
+test('buildInjection: 与人设前缀相同的片段被丢弃', () => {
+  const result = buildInjection({ personaPrefix: 'Be calm.', fragments: ['Be calm.', 'Be brief.'] })
+  assert.equal(result.prompt, 'Be calm.\n\nBe brief.')
+  assert.deepEqual(result.dropped, [
+    { reason: 'empty', text: '' },
+    { reason: 'duplicate', text: 'Be calm.' },
+  ])
+})
