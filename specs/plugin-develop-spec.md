@@ -26,7 +26,7 @@
 | `dependencies` | 否 | 插件 id 数组,安装时须已存在,激活时须已激活 | `missing-dependency` |
 | `conflicts` | 否 | 插件 id 数组,任一已安装即拒绝 | `conflict` |
 | `capabilities` | 是 | 能力表内的名字,不得重复 | `invalid-manifest`(重复)、`unknown-capability`(未知或第三方申请 `net:fetch`) |
-| `contributions` | 否 | 贡献点名字,当前只有 `session:changed`,不得重复 | `invalid-manifest`(重复)、`unknown-contribution`(未知) |
+| `contributions` | 否 | 贡献点名字,当前有 `session:changed` 与 `chat:before-request`,不得重复 | `invalid-manifest`(重复)、`unknown-contribution`(未知) |
 
 清单的形态收敛另有一条:读取清单时 `id`、`name`、`version` 必须是字符串,`capabilities` 必须是字符串数组,其余四个字段要么缺省,要么是字符串数组;不符合这些形态时按清单缺失处理,安装结果为 `invalid-manifest`。
 
@@ -36,6 +36,7 @@
 |:---:|:---:|
 | `sessions:list`、`sessions:read`、`sessions:rename`、`events:session`、`notify`、`settings:locale` | 全部插件 |
 | `plugins:storage` | 全部插件 |
+| `chat:request` | 全部插件;登记请求前处理器,须同时声明贡献点 `chat:before-request` |
 | `net:fetch` | 仅内置插件,第三方申请按 `unknown-capability` 拒绝 |
 
 ### 2.2 校验顺序与结果
@@ -78,6 +79,34 @@ export const manifest: PluginManifest = {
 ```
 
 完整示例见 dsc-plugin-template 仓库的 `examples/session-digest`,字段取值可用 [清单 Schema](../schemas/manifest/plugin-manifest.schema.json) 校验。
+
+### 2.5 请求前补丁
+
+申请能力 `chat:request` 并声明贡献点 `chat:before-request` 后,插件可以在激活时登记一个处理器:
+
+```ts
+context.chat.onBeforeRequest((preview) => {
+  if (!preview.lastUserMessage.includes('简短')) {
+    return null
+  }
+  return { maxTokens: 256, systemPromptAppend: '请尽量简短。' }
+})
+```
+
+处理器同步返回补丁、`null` 或不返回,后两者都表示不改请求。引擎在请求参数构造完成后、真正发请求前调用一次,全部处理器共用 10 毫秒预算。
+
+| 字段 | 形态 | 范围 | 落到请求的字段 |
+|:---:|:---:|:---:|:---:|
+| `temperature` | 数字 | 0 到 2 | `temperature` |
+| `topP` | 数字 | 0 到 1 | `top_p` |
+| `maxTokens` | 正整数 | 1 到 4096,小数四舍五入 | `max_tokens` |
+| `stop` | 字符串数组 | 最多 4 条,每条最多 32 字符 | `stop_sequences` |
+| `systemPromptAppend` | 字符串 | 最多 2000 字符 | 追加到 `system` 之后 |
+| `systemPromptReplace` | 字符串 | 最多 8000 字符 | 整体替换 `system` |
+
+- 越界按边界裁剪,未知字段静默丢弃,空白字符串按未提供处理;插件不必自行裁剪。
+- 多个插件同时登记时按登记顺序合并:标量以后登记者为准,`stop` 取并集并在 4 条处截断,`systemPromptAppend` 按顺序拼接后按长度截断,`systemPromptReplace` 以后登记者为准。
+- 处理器超时或抛错时整份补丁作废,请求按原参数发出;错误只写日志,不阻断请求。
 
 ## 3. 版本与依赖
 

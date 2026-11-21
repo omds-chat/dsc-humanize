@@ -39,7 +39,7 @@
     },
     "contributions": {
       "type": "array",
-      "description": "订阅的贡献点,不得重复;当前只有 session:changed",
+      "description": "订阅的贡献点,不得重复;当前有 session:changed 与 chat:before-request",
       "items": {
         "$ref": "#/$defs/contribution"
       },
@@ -100,13 +100,15 @@
         "notify",
         "settings:locale",
         "plugins:storage",
-        "net:fetch"
+        "net:fetch",
+        "chat:request"
       ]
     },
     "contribution": {
       "type": "string",
       "enum": [
-        "session:changed"
+        "session:changed",
+        "chat:before-request"
       ]
     }
   }

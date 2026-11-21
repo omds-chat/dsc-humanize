@@ -17,11 +17,12 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 文本产物强制 LF 换行,`plugin.js` 默认行压缩
 - 一套可校验的规范区:运行时规范、开发规范与 JSON Schema,随仓库保留用于本地校验
 - 一套内核骨架:意图分类、标签到策略的解析、提示词注入拼接与按类型读取的资产适配层,不依赖模型与宿主能力
-- 一套零依赖的内核测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产按类型读取与校验、内核装配
+- 一套宿主请求前接线:申请 `chat:request` 能力并声明 `chat:before-request` 贡献点,把内核的策略与注入结果映射成宿主补丁
+- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分、策略合并、注入拼接、资产按类型读取与校验、内核装配与请求前接线
 
-本轮的产物是内核骨架,助手人性化尚未生效:运行时仍只订阅会话切换事件、写插件日志、用宿主文案键提示一次,用来确认插件能在宿主中正常加载与运行。
+内核通过宿主的请求前能力落到请求上:有资产时按策略改写请求参数与系统提示词,没有资产时请求保持原样。插件同时记录会话切换,并在首次激活时用宿主文案键提示一次。
 
-## 当前实现范围
+## 已接入宿主请求能力
 
 | 模块 | 位置 | 状态 |
 |:---:|:---:|:---:|
@@ -30,15 +31,16 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 | 注入构建 | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | 纯函数:人设前缀、策略注入文本与注入类型片段的拼接、去重与位置 |
 | 资产加载 | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | 按包元数据的类型声明读取,声明与内容双向一致;本地数据可用,URL 只留读取通道接口,内核不发请求 |
 | 内核装配 | [src/humanize/kernel.ts](src/humanize/kernel.ts) | 按类型取来源,串起分类、策略与注入,产出一次规划与来源记录 |
+| 宿主请求接线 | [src/host/request-patch.ts](src/host/request-patch.ts) | 申请能力 `chat:request` 并声明贡献点 `chat:before-request`,把分类、策略与注入结果映射为宿主补丁;没有标签集或策略表、分类器抛错时返回 `null`,不改请求 |
 | 资产编辑界面 | 尚未实现 | 插件还没有界面入口,资产的输入、编辑与导入导出都未落地 |
 | 资产包格式 | [src/humanize/types.ts](src/humanize/types.ts) | 格式由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0);内核按类型读取已实现,导入导出与编辑界面未实现 |
 
-- 内核只做纯计算:输出意图、策略、提示词片段与来源记录,不写回任何请求,也不读写宿主状态。
-- 宿主能力待定:当前 dsc-plugin-engine 没有修改请求参数与系统提示词的入口,内核因此只产出策略;新增能力的评估放在主线仓库,本仓库不预先假设接口。
+- 内核只做纯计算:输出意图、策略、提示词片段与来源记录,不写回任何请求,也不读写宿主状态;落地由宿主请求接线完成。
+- 宿主请求能力已具备(`chat:request`):清单同时声明贡献点 `chat:before-request`,激活时登记处理器;处理器同步返回 `temperature`、`topP`、`maxTokens`、`stop` 与 `systemPromptAppend`,数值与文本长度不在插件里裁剪,越界由引擎按补丁上限收敛;超时或抛错时整份补丁作废,请求按原参数发出。
+- 资产装载入口:`setActiveContents` 按类型接收当前使用的内容,形状与内核装配参数一致;未交付时为空,插件不改请求。资产的编辑与导入入口尚未实现。
 - 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),内核按包元数据的类型声明读取,声明与实际内容双向一致;导入导出与编辑界面尚未实现,`dsc-humanize-inner-asset` 的预设包要等导入路径落地后才能直接对接。
-- 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导入导出都还没有落地,内核只提供分类、策略与注入的纯计算。
-- 未接入宿主:激活流程只记录内核版本,尚未装载真实资产,也不消费宿主数据。
-- 自检覆盖类型、构建、规范与内核纯函数:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
+- 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导入导出都还没有落地。
+- 自检覆盖类型、构建、规范、内核纯函数与请求前接线:`pnpm run type`、`pnpm run build`、`pnpm run validate:specs`、`pnpm run test`。
 
 ## 规范与 Schema
 
@@ -85,6 +87,7 @@ dsc-humanize/
 │   ├── test/                 # 内核纯函数测试,node:test 运行
 │   │   ├── ts-hooks.mjs      # 让测试直接加载 .ts 源码的解析钩子
 │   │   ├── asset-loader.test.ts
+│   │   ├── host-wiring.test.ts # 宿主请求前接线
 │   │   ├── injection-builder.test.ts
 │   │   ├── kernel.test.ts
 │   │   ├── rule-classifier.test.ts
@@ -99,6 +102,8 @@ dsc-humanize/
 │   ├── index.ts              # 激活与停用入口
 │   ├── manifest.ts           # 运行时清单
 │   ├── types.ts              # 契约类型
+│   ├── host/
+│   │   └── request-patch.ts  # 宿主请求前接线:策略与注入 -> 请求补丁
 │   └── humanize/             # 内核骨架,不接宿主
 │       ├── index.ts          # 内核对外出口
 │       ├── kernel.ts         # 内核装配:分类 -> 策略 -> 注入
@@ -121,11 +126,12 @@ dsc-humanize/
 | `package.json` | 工程信息与 `meta.json` 的数据来源 |
 | `src/index.ts` | 激活与停用入口 |
 | `src/manifest.ts` | 插件运行时清单,产物继续导出 |
-| `src/humanize/` | 内核骨架:意图分类、策略引擎、注入构建与资产加载,清单不因此变化 |
+| `src/host/` | 宿主请求接线:申请 `chat:request`,把内核结果映射成宿主补丁 |
+| `src/humanize/` | 内核骨架:意图分类、策略引擎、注入构建与资产加载,不读写宿主 |
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
 | `schemas/runtime/` | 运行时 meta 的 JSON Schema,构建自校验覆盖其中的必填与格式规则 |
 | `scripts/validate-specs.mjs` | 零依赖校验脚本,校验 Schema、样例与本仓库 meta |
-| `scripts/test/` | 内核纯函数测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、内核装配 |
+| `scripts/test/` | 测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、内核装配、宿主请求前接线 |
 | `specs/` | 规范区:运行时规范、开发规范与版本信息 |
 | `.env.example` | 环境变量模板 |
 
@@ -331,7 +337,7 @@ cp .env.example .env
 | `dependencies` | 否 | 依赖的插件 id,安装时须已存在,激活时须已激活 |
 | `conflicts` | 否 | 冲突的插件 id,同时安装会被拒绝 |
 | `capabilities` | 是 | 申请的能力,不得重复 |
-| `contributions` | 否 | 订阅的贡献点,可选值为 `session:changed` |
+| `contributions` | 否 | 订阅的贡献点,可选值为 `session:changed` 与 `chat:before-request` |
 
 改清单时的注意事项:
 
@@ -352,10 +358,11 @@ cp .env.example .env
 | `notify` | `context.ui.notify` | 10 次 / 10 秒 |
 | `settings:locale` | `context.settings.locale` | 60 次 / 10 秒 |
 | `plugins:storage` | `context.storage` | 100 次 / 10 秒,单插件 64KB |
+| `chat:request` | `context.chat.onBeforeRequest` | 10 次 / 10 秒(仅登记) |
 
 `net:fetch` 仅内置插件可申请,第三方插件在清单里写它会被拒绝。
 
-本插件当前申请 `events:session` 与 `notify` 两项能力,只订阅 `session:changed` 一个贡献点;实现助手人性化与资产编辑时按需增补,不要一次性申请用不到的能力。
+本插件当前申请 `events:session`、`notify` 与 `chat:request` 三项能力,声明 `session:changed` 与 `chat:before-request` 两个贡献点;不申请用不到的能力。
 
 ## 发布
 

@@ -8,6 +8,6 @@ export const manifest: PluginManifest = {
   name: 'Humanize',
   version: '0.1.0',
   engines: '^1.0.0',
-  capabilities: ['events:session', 'notify'],
-  contributions: ['session:changed'],
+  capabilities: ['events:session', 'notify', 'chat:request'],
+  contributions: ['session:changed', 'chat:before-request'],
 }

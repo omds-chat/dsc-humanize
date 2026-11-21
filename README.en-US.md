@@ -17,11 +17,12 @@ The project skeleton comes from dsc-plugin-template: source in TypeScript, bundl
 - LF line endings on every text output, with minification on by default
 - a set of checkable specs: the runtime spec, the development spec and their JSON Schemas, kept in this repository for local validation
 - a kernel skeleton: intent classification, label-to-strategy resolution, prompt injection assembly and an adapter that reads assets by type, depending on neither a model nor a host capability
-- a dependency-free kernel test suite: Node `node:test` covers scoring, strategy merging, injection assembly, reading and validating assets by type, and kernel assembly
+- a host request hook: applies for the `chat:request` capability and declares the `chat:before-request` contribution, mapping the kernel's strategy and injection result onto a host patch
+- a dependency-free test suite: Node `node:test` covers scoring, strategy merging, injection assembly, reading and validating assets by type, kernel assembly and the request hook
 
-This round lands the kernel skeleton, and humanizing the assistant is still inactive: at runtime the plugin only subscribes to the session switch event, writes to the plugin log, and shows one notice through a host message key, which is enough to confirm that the host loads and runs it.
+The kernel lands on requests through the host before-request capability: with assets it rewrites request parameters and the system prompt, and without assets the request stays unchanged. The plugin also logs session switches and shows one install notice through a host message key.
 
-## Current implementation scope
+## Host request capability wired
 
 | Module | Location | State |
 |:---:|:---:|:---:|
@@ -30,15 +31,16 @@ This round lands the kernel skeleton, and humanizing the assistant is still inac
 | Injection assembly | [src/humanize/injection/builder.ts](src/humanize/injection/builder.ts) | Pure function: joins the persona prefix, the strategy injection text and the injection-type fragments, deduplicates, and places the result |
 | Asset loading | [src/humanize/assets/loader.ts](src/humanize/assets/loader.ts) | Reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways; local data works, a URL is only a read transport interface and the kernel sends no request |
 | Kernel assembly | [src/humanize/kernel.ts](src/humanize/kernel.ts) | Takes one source per type and wires classification, strategy and injection into one plan with source records |
+| Host request hook | [src/host/request-patch.ts](src/host/request-patch.ts) | Applies for the `chat:request` capability, declares the `chat:before-request` contribution, and maps classification, strategy and injection onto a host patch; returns `null` without a label set or strategy table, or when the classifier throws |
 | Asset editing UI | not implemented | The plugin has no interface entry yet, so entering, editing, importing and exporting assets are all pending |
 | Asset bundle format | [src/humanize/types.ts](src/humanize/types.ts) | Defined by `dsc-humanize-asset-template` (format version 1.0.0); reading by type is implemented, while import/export and the editing UI are not |
 
-- The kernel is pure computation: it returns the intent, the strategy, prompt fragments and source records, and never writes back to a request or reads host state.
-- Host capability is pending: dsc-plugin-engine has no entry point for changing request parameters or the system prompt, so the kernel only produces a strategy. Any new capability is evaluated in the main repository; this repository assumes no interface.
+- The kernel is pure computation: it returns the intent, the strategy, prompt fragments and source records, and never writes back to a request or reads host state; landing on a request belongs to the host request hook.
+- The host request capability is available (`chat:request`): the manifest also declares the `chat:before-request` contribution, and activation registers a handler. The handler returns `temperature`, `topP`, `maxTokens`, `stop` and `systemPromptAppend` synchronously; numbers and text lengths are not clamped in the plugin, out-of-range values are converged by the engine against the patch limits; on timeout or a throw the whole patch is dropped and the request goes out with its original parameters.
+- Asset loading entry: `setActiveContents` takes the content currently in use by type, in the same shape as the kernel assembly options; when nothing is delivered it is empty and the plugin leaves requests unchanged. The editing and import entry points are not implemented yet.
 - The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0); the kernel reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways. The import/export path and the editing UI are not built yet, so the preset packages from `dsc-humanize-inner-asset` cannot be wired up until the import path lands.
-- The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one import/export of humanization assets are all pending; the kernel only offers pure classification, strategy and injection computation.
-- The host is not wired yet: activation only logs the kernel version, loads no real asset and consumes no host data.
-- Self-checks cover types, the build, the specs and the kernel pure functions: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
+- The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one import/export of humanization assets are all pending.
+- Self-checks cover types, the build, the specs, the kernel pure functions and the request hook: `pnpm run type`, `pnpm run build`, `pnpm run validate:specs` and `pnpm run test`.
 
 ## Specs and schemas
 
@@ -85,6 +87,7 @@ dsc-humanize/
 │   ├── test/                 # kernel pure-function tests, run by node:test
 │   │   ├── ts-hooks.mjs      # resolve hook so the tests load .ts source directly
 │   │   ├── asset-loader.test.ts
+│   │   ├── host-wiring.test.ts # request hook wiring
 │   │   ├── injection-builder.test.ts
 │   │   ├── kernel.test.ts
 │   │   ├── rule-classifier.test.ts
@@ -99,6 +102,8 @@ dsc-humanize/
 │   ├── index.ts              # activation and deactivation entry points
 │   ├── manifest.ts           # runtime manifest
 │   ├── types.ts              # contract types
+│   ├── host/
+│   │   └── request-patch.ts  # request hook: strategy and injection -> patch
 │   └── humanize/             # kernel skeleton, not wired to the host
 │       ├── index.ts          # kernel public surface
 │       ├── kernel.ts         # kernel assembly: classify -> strategy -> inject
@@ -121,11 +126,12 @@ dsc-humanize/
 | `package.json` | Project metadata and the source of `meta.json` |
 | `src/index.ts` | Activation and deactivation entry points |
 | `src/manifest.ts` | Runtime manifest, still exported by the output |
-| `src/humanize/` | Kernel skeleton: intent classification, strategy engine, injection assembly and asset loading; the manifest does not change |
+| `src/host/` | Request hook: applies for `chat:request` and maps kernel results onto a host patch |
+| `src/humanize/` | Kernel skeleton: intent classification, strategy engine, injection assembly and asset loading; it never reads or writes host state |
 | `schemas/manifest/` | Manifest JSON Schema, aligned with the host manifest checks |
 | `schemas/runtime/` | JSON Schema for the runtime meta; the build self-validation covers its required and format rules |
 | `scripts/validate-specs.mjs` | Dependency-free validator for the schemas, samples and this repository meta |
-| `scripts/test/` | Kernel pure-function tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, kernel assembly |
+| `scripts/test/` | Tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, kernel assembly, request hook wiring |
 | `specs/` | Spec area: runtime spec, development spec, version info |
 | `.env.example` | Environment template |
 
@@ -331,7 +337,7 @@ The manifest lives in [src/manifest.ts](src/manifest.ts) and is re-exported by [
 | `dependencies` | no | Required plugin ids, present at install time and active at activation time |
 | `conflicts` | no | Conflicting plugin ids, installing both is rejected |
 | `capabilities` | yes | Requested capabilities, no duplicates |
-| `contributions` | no | Subscribed contribution points, the only value is `session:changed` |
+| `contributions` | no | Subscribed contribution points, `session:changed` and `chat:before-request` |
 
 Things to keep in mind:
 
@@ -352,10 +358,11 @@ Things to keep in mind:
 | `notify` | `context.ui.notify` | 10 calls / 10 s |
 | `settings:locale` | `context.settings.locale` | 60 calls / 10 s |
 | `plugins:storage` | `context.storage` | 100 calls / 10 s, 64KB per plugin |
+| `chat:request` | `context.chat.onBeforeRequest` | 10 calls / 10 s (registration only) |
 
 `net:fetch` is available to built-in plugins only; a third-party manifest that requests it is rejected.
 
-This plugin currently requests `events:session` and `notify`, and subscribes to the single contribution point `session:changed`; add more only when the humanization and asset editing features need them, never capabilities it does not use.
+This plugin currently requests `events:session`, `notify` and `chat:request`, and declares `session:changed` and `chat:before-request`; it never requests a capability it does not use.
 
 ## Publishing
 

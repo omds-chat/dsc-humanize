@@ -16,9 +16,10 @@ export type DscCapability =
   | 'settings:locale'
   | 'plugins:storage'
   | 'net:fetch'
+  | 'chat:request'
 
-/** 贡献点,当前只实现了 session:changed */
-export type DscContribution = 'session:changed'
+/** 贡献点:会话切换事件与请求前环节 */
+export type DscContribution = 'session:changed' | 'chat:before-request'
 
 /**
  * 插件清单。
@@ -151,6 +152,44 @@ export interface PluginNetApi {
   postJson(url: string, body: unknown, options?: PluginCallOptions): Promise<PluginNetPostResponse>
 }
 
+/** 请求前的只读切片;只给最后一条用户消息文本,不给整段会话 */
+export interface ChatRequestPreview {
+  readonly lastUserMessage: string
+}
+
+/**
+ * 请求补丁,插件能返回的全部字段,全部可缺省。
+ * 引擎按白名单收敛:未知字段丢弃,越界值按边界裁剪,超时或抛错时整份补丁作废。
+ */
+export interface ChatRequestPatch {
+  /** 0 到 2 */
+  temperature?: number
+  /** 0 到 1 */
+  topP?: number
+  /** 1 到 4096 的正整数 */
+  maxTokens?: number
+  /** 最多 4 条,每条最多 32 字符 */
+  stop?: string[]
+  /** 追加到系统提示词之后,最多 2000 字符 */
+  systemPromptAppend?: string
+  /** 整体替换系统提示词,最多 8000 字符 */
+  systemPromptReplace?: string
+}
+
+/** 请求前处理器;返回补丁、null 或什么都不返回,三者都表示不改请求 */
+export type ChatBeforeRequestHandler = (
+  preview: ChatRequestPreview,
+) => ChatRequestPatch | null | undefined
+
+/**
+ * 能力 chat:request。
+ * 处理器在每次发请求前同步调用一次,全部处理器共用 10 毫秒预算;
+ * 返回释放函数,引擎在停用与卸载时自动执行,插件不要自行重复调用。
+ */
+export interface PluginChatApi {
+  onBeforeRequest(handler: ChatBeforeRequestHandler): () => void
+}
+
 /**
  * 激活时注入的上下文。
  * 各能力成员只在清单申请了对应能力时可用,未申请时调用抛 PluginCapabilityError。
@@ -168,6 +207,7 @@ export interface PluginContext {
   settings: PluginSettingsApi
   net: PluginNetApi
   storage: PluginStorageApi
+  chat: PluginChatApi
 }
 
 /**

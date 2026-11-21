@@ -7,7 +7,7 @@ import type {
 } from '../types.js'
 
 /** 默认置信度阈值:低于它的标签不进策略解析 */
-const DEFAULT_MIN_CONFIDENCE = 0.3
+export const DEFAULT_MIN_CONFIDENCE = 0.3
 
 /** 规则分类器的装配参数 */
 export interface RuleClassifierOptions {
@@ -54,6 +54,24 @@ export const scoreLabels = (text: string, labels: readonly LabelDefinition[]): I
 }
 
 /**
+ * 同步分类:打分、按阈值过滤、取最高置信度标签。
+ *
+ * 规则分类器的唯一实现,异步的 classify 只是给同一结果套一层 Promise。
+ * 宿主在请求前同步回调里需要结果时走这里,不能走异步入口。
+ */
+export const classifyIntent = (
+  input: ClassifyInput,
+  id: string,
+  defaultMinConfidence: number,
+): IntentResult => {
+  const minConfidence = input.minConfidence ?? defaultMinConfidence
+  const labels = scoreLabels(input.text, input.labels).filter((item) => item.confidence >= minConfidence)
+  const primary = labels[0] ?? null
+
+  return { text: input.text, labels, primary, classifier: id }
+}
+
+/**
  * 创建规则分类器:不依赖模型,只按资产提供的关键词打分。
  * 这是默认可用路径,接入 ONNX 之前装配方都应回退到它。
  */
@@ -64,13 +82,8 @@ export const createRuleClassifier = (options: RuleClassifierOptions = {}): Inten
   return {
     id,
     kind: 'rule',
-    classify: (input: ClassifyInput): Promise<IntentResult> => {
-      const minConfidence = input.minConfidence ?? defaultMinConfidence
-      const labels = scoreLabels(input.text, input.labels).filter((item) => item.confidence >= minConfidence)
-      const primary = labels[0] ?? null
-
-      return Promise.resolve({ text: input.text, labels, primary, classifier: id })
-    },
+    classify: (input: ClassifyInput): Promise<IntentResult> =>
+      Promise.resolve(classifyIntent(input, id, defaultMinConfidence)),
   }
 }
 

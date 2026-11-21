@@ -41,7 +41,7 @@
 | `activate(context)` | 是 | 启动入口,可返回 Promise;返回值被忽略 |
 | `deactivate()` | 否 | 停用入口,可返回 Promise;返回值被忽略 |
 
-`activate` 的返回值不会被当作释放函数,释放统一走 `context.events.on` 返回的函数。产物没有可识别的 `activate` 时,安装结果为 `invalid-plugin`。
+`activate` 的返回值不会被当作释放函数,释放统一走 `context.events.on` 与 `context.chat.onBeforeRequest` 返回的函数。产物没有可识别的 `activate` 时,安装结果为 `invalid-plugin`。
 
 ## 3. 生命周期与超时
 
@@ -77,8 +77,9 @@
 | `settings:locale` | `context.settings.locale` | 60 次 / 10 秒 | 3 秒 | 全部插件 |
 | `plugins:storage` | `context.storage.get`、`set`、`remove` | 100 次 / 10 秒 | 同步调用 | 全部插件 |
 | `net:fetch` | `context.net.getText` | 10 次 / 10 秒 | 内层 10 秒中止请求 | 仅内置插件 |
+| `chat:request` | `context.chat.onBeforeRequest` | 10 次 / 10 秒(仅登记) | 同步调用,全部处理器共用 10 毫秒 | 全部插件 |
 
-- 限流按插件实例独立计数,每个插件各有一份时间窗;`context.events.on` 每调用一次消耗 `events:session` 的一个名额。
+- 限流按插件实例独立计数,每个插件各有一份时间窗;`context.events.on` 每调用一次消耗 `events:session` 的一个名额,`context.chat.onBeforeRequest` 每登记一次消耗 `chat:request` 的一个名额,引擎每次发请求前调用处理器不再占用名额。
 - 两个能力标识只由引擎使用,插件清单不能申请,申请时按 `unknown-capability` 拒绝,也不会出现在上下文里:
   - `net:fetch-post`:`context.net.postJson` 背后的独立标识,有自己的限流窗口与 5 秒超时,复用 `net:fetch` 的授予口径,避免计数请求挤占读取预算。
   - `plugins:data-clear`:卸载清理专用,插件不可达。
@@ -95,6 +96,7 @@
 | `context.sessions.read(id, options?)` | `Promise<SessionView \| null>` | 会话内容只读视图,不存在时为 `null` |
 | `context.sessions.rename(id, title)` | `boolean` | 同步调用 |
 | `context.events.on(point, handler)` | 释放函数 | 订阅贡献点,释放函数由引擎执行 |
+| `context.chat.onBeforeRequest(handler)` | 释放函数 | 登记请求前处理器,释放函数由引擎执行 |
 | `context.ui.notify(key, params?)` | 无返回 | 宿主提示,key 取自宿主 i18n 既有文案键 |
 | `context.settings.locale(options?)` | `Promise<'zh-CN' \| 'en-US'>` | 当前语言 |
 | `context.storage.get(key)` | `unknown` | 缺失的键返回 `null` |
@@ -112,6 +114,7 @@
 | 会话摘要 | `id`、`title`、`createdAt`、`updatedAt` |
 | 会话内容 | 摘要字段与 `messages`;消息含 `id`、`role`、`createdAt`、`text`、`attachments`,附件含 `name`、`size`、`isImage` |
 | 事件 | `session:changed` 与当前会话 `activeId` |
+| 请求切片 | `lastUserMessage`,即本次请求最后一条用户消息的文本 |
 | 设置 | 当前语言 |
 | 插件数据 | 该插件自己写入的键值,读写按插件 id 隔离 |
 
@@ -122,6 +125,8 @@
 - 只有清单声明了 `session:changed` 才能调用 `context.events.on('session:changed', handler)`,否则抛 `PluginCapabilityError`。
 - `on` 返回释放函数;引擎在停用、卸载与激活失败时自动执行,插件不要重复调用。
 - 处理器逐个插件、逐个隔离:同步抛错与异步拒绝都只写入该插件日志,不影响其他处理器。
+- 请求前环节:只有清单同时申请能力 `chat:request` 并声明贡献点 `chat:before-request`,才能调用 `context.chat.onBeforeRequest(handler)`,缺任一项抛 `PluginCapabilityError`。
+- 请求前处理器同步返回补丁、`null` 或不返回,后两者都表示不改请求;引擎每次发送前按登记顺序调用一次,全部处理器共用 10 毫秒预算,超时或抛错时整份补丁作废。补丁字段与收敛规则见 [plugin-develop-spec.md](plugin-develop-spec.md) 的 2.5 节。
 
 ### 5.3 提示与设置
 
