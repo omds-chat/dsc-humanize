@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createAssetLoader, readAssetPackage } from '../../src/humanize/assets/loader.ts'
+import { createAssetLoader, readAssetContents, readAssetPackage } from '../../src/humanize/assets/loader.ts'
 import type { AssetPackageDocument, AssetTextTransport } from '../../src/humanize/types.ts'
 
 /** 包元数据的最小形状,字段取格式规范要求的最小合法值 */
@@ -354,4 +354,193 @@ test('createAssetLoader: URL 通道收到地址与调用选项', async () => {
   assert.equal(calls.length, 1)
   assert.equal(calls[0]?.url, 'https://example.test/asset.json')
   assert.equal(calls[0]?.signal, controller.signal)
+})
+
+/* ---------- 对比示例(1.1.0 第五类,规范 7.5) ---------- */
+
+/** 1.1.0 格式版本的包文档构造器:1.1.0 特性的用例统一用它 */
+const document110 = (types: readonly string[], contents: Record<string, unknown>): AssetPackageDocument => ({
+  metadata: { ...metadata(types), formatVersion: '1.1.0' },
+  contents,
+})
+
+const exampleItem = {
+  id: 'over-brief-contrast',
+  name: '简洁边界对比',
+  description: '用正反例约束回答何时该短',
+  cases: [
+    {
+      scene: '一句话能答完的事实问题',
+      negative: '这个问题其实可以从多个角度来看……',
+      positive: '支持。需要细节的话我再展开三点。',
+    },
+    { negative: '你好!很高兴见到你!……', positive: '你好,在的。说吧。' },
+  ],
+}
+
+test('readAssetPackage: 只声明 examples 的纯对比示例包合法', () => {
+  const result = readAssetPackage(document110(['examples'], { examples: [exampleItem] }))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.asset.types, ['examples'])
+  assert.deepEqual(result.asset.contents.examples?.items, [exampleItem])
+})
+
+test('readAssetPackage: 五类齐全的包合法', () => {
+  const result = readAssetPackage(document110(
+    [...ALL_TYPES, 'examples'],
+    { ...validDocument().contents, examples: [exampleItem] },
+  ))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.asset.types, [...ALL_TYPES, 'examples'])
+})
+
+test('readAssetPackage: 对比示例字段校验', () => {
+  const examples = (value: unknown): AssetPackageDocument => document110(['examples'], { examples: value })
+  expectFailure(examples(['x']), 'invalid-asset', 'contents.examples[0]')
+  expectFailure(examples([{ id: 'a' }]), 'invalid-asset', 'contents.examples[0].name')
+  expectFailure(examples([{ id: 'a', name: 'n' }]), 'invalid-asset', 'contents.examples[0].cases')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [] }]), 'invalid-asset', 'contents.examples[0].cases')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{}] }]), 'invalid-asset', 'contents.examples[0].cases[0].negative')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{ negative: 'n' }] }]), 'invalid-asset', 'contents.examples[0].cases[0].positive')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{ positive: 'p' }] }]), 'invalid-asset', 'contents.examples[0].cases[0].negative')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{ scene: ' ', negative: 'n', positive: 'p' }] }]), 'invalid-asset', 'contents.examples[0].cases[0].scene')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{ scene: 's', negative: ' ', positive: 'p' }] }]), 'invalid-asset', 'contents.examples[0].cases[0].negative')
+  expectFailure(examples([{ id: 'a', name: 'n', cases: [{ scene: 's', negative: 'n', positive: 'p' }] }, { id: 'a', name: 'm', cases: [{ negative: 'n', positive: 'p' }] }]), 'invalid-asset', 'contents.examples[1].id')
+})
+
+test('readAssetPackage: 已装配内容里的 examples 照常收下', () => {
+  const result = readAssetContents({
+    examples: { source: { id: 'dsc-contrast' }, items: [exampleItem] },
+  })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.contents.examples?.source, { id: 'dsc-contrast' })
+})
+
+/* ---------- 标签新字段的结构校验(1.1.0,规范 7.2) ---------- */
+
+test('readAssetPackage: 合法的排除词与锚定模式照常收下', () => {
+  const result = readAssetPackage(document110(['labels'], {
+    labels: [{
+      id: 'code-help',
+      keywords: ['代码', '报错', '依赖'],
+      exclude_keywords: ['安装依赖', '卸载依赖'],
+      patterns: ['^帮我(写|改|看).*(代码|脚本)$'],
+    }],
+  }))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.asset.contents.labels?.items[0], {
+    id: 'code-help',
+    keywords: ['代码', '报错', '依赖'],
+    exclude_keywords: ['安装依赖', '卸载依赖'],
+    patterns: ['^帮我(写|改|看).*(代码|脚本)$'],
+  })
+})
+
+test('readAssetPackage: exclude_keywords 结构不合法时拒绝', () => {
+  const labels = (value: unknown): AssetPackageDocument => document(['labels'], { labels: value })
+  expectFailure(labels([{ id: 'a', exclude_keywords: ['x', ''] }]), 'invalid-asset', 'contents.labels[0].exclude_keywords')
+  expectFailure(labels([{ id: 'a', exclude_keywords: [1] }]), 'invalid-asset', 'contents.labels[0].exclude_keywords')
+  expectFailure(labels([{ id: 'a', exclude_keywords: ['dup', 'dup'] }]), 'invalid-asset', 'contents.labels[0].exclude_keywords')
+})
+
+test('readAssetPackage: 排除词与关键词重复时拒绝', () => {
+  expectFailure(document(['labels'], {
+    labels: [{ id: 'a', keywords: ['依赖'], exclude_keywords: ['依赖'] }],
+  }), 'invalid-asset', 'contents.labels[0].exclude_keywords')
+})
+
+test('readAssetPackage: patterns 结构不合法时拒绝,且先于版本门判定', () => {
+  const labels = (value: unknown): AssetPackageDocument => document(['labels'], { labels: value })
+  expectFailure(labels([{ id: 'a', patterns: ['帮我写.*$'] }]), 'invalid-asset', 'contents.labels[0].patterns[0]')
+  expectFailure(labels([{ id: 'a', patterns: ['^帮我写.*'] }]), 'invalid-asset', 'contents.labels[0].patterns[0]')
+  expectFailure(labels([{ id: 'a', patterns: ['^帮我(?i)写.*$'] }]), 'invalid-asset', 'contents.labels[0].patterns[0]')
+  expectFailure(labels([{ id: 'a', patterns: ['^帮我写[代码$'] }]), 'invalid-asset', 'contents.labels[0].patterns[0]')
+  expectFailure(labels([{ id: 'a', patterns: ['^a$', '^a$'] }]), 'invalid-asset', 'contents.labels[0].patterns[1]')
+})
+
+/* ---------- 特性按版本判定(规范第八节、第十节) ---------- */
+
+const metadata110 = (types: readonly string[]): Record<string, unknown> => ({
+  ...metadata(types),
+  formatVersion: '1.1.0',
+})
+
+test('readAssetPackage: 1.0.0 包声明 examples 时按 format-version-feature 拒绝', () => {
+  expectFailure(
+    document(['examples'], { examples: [exampleItem] }),
+    'format-version-feature',
+    'metadata.types',
+  )
+})
+
+test('readAssetPackage: 1.0.0 包声明 exclude_keywords 时按 format-version-feature 拒绝', () => {
+  expectFailure(
+    document(['labels'], { labels: [{ id: 'a', keywords: ['k'], exclude_keywords: ['x'] }] }),
+    'format-version-feature',
+    'contents.labels[0].exclude_keywords',
+  )
+})
+
+test('readAssetPackage: 1.0.0 包声明 patterns 时按 format-version-feature 拒绝', () => {
+  expectFailure(
+    document(['labels'], { labels: [{ id: 'a', patterns: ['^a$'] }] }),
+    'format-version-feature',
+    'contents.labels[0].patterns',
+  )
+})
+
+test('readAssetPackage: 1.0.0 包声明 dimension 时按 format-version-feature 拒绝', () => {
+  expectFailure(
+    document(['strategies'], {
+      strategies: [{
+        id: 'daily',
+        version: '1.0.0',
+        rules: [{ label: 'tone', dimension: 'length', strategy: { temperature: 0.5 } }],
+      }],
+    }),
+    'format-version-feature',
+    'contents.strategies[0].rules[0].dimension',
+  )
+})
+
+test('readAssetPackage: 1.1.0 包的 1.1.0 特性全部放行', () => {
+  const result = readAssetPackage({
+    metadata: metadata110(['labels', 'strategies', 'examples']),
+    contents: {
+      labels: [{ id: 'a', keywords: ['k'], exclude_keywords: ['x'], patterns: ['^a$'] }],
+      strategies: [{
+        id: 'daily',
+        version: '1.1.0',
+        rules: [{ label: 'a', dimension: 'language', strategy: { injection: '语言要求。' } }],
+      }],
+      examples: [exampleItem],
+    },
+  })
+  assert.equal(result.ok, true)
+})
+
+test('readAssetPackage: formatVersion 不是三段数字时拒绝', () => {
+  expectFailure(
+    { metadata: { ...metadata(['persona']), formatVersion: '1.0' }, contents: { persona: [persona] } },
+    'invalid-asset',
+    'metadata.formatVersion',
+  )
+  expectFailure(
+    { metadata: { ...metadata(['persona']), formatVersion: 'latest' }, contents: { persona: [persona] } },
+    'invalid-asset',
+    'metadata.formatVersion',
+  )
+})
+
+test('readAssetPackage: 主版本不同的包按 format-version-unsupported 拒绝', () => {
+  const legacy = { ...metadata(['persona']), formatVersion: '2.0.0' }
+  expectFailure(
+    { metadata: legacy, contents: { persona: [persona] } },
+    'format-version-unsupported',
+    'metadata.formatVersion',
+  )
 })

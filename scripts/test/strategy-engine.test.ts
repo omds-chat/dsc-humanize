@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  composeInjection,
   normalizeStop,
   resolveStrategy,
   validateStrategyTable,
 } from '../../src/humanize/strategy/engine.ts'
-import type { IntentLabel, StrategyTable } from '../../src/humanize/types.ts'
+import type { IntentLabel, StrategyRule, StrategyTable } from '../../src/humanize/types.ts'
 
 /** 一条能通过校验的最小策略表 */
 const validTable = (): StrategyTable => ({
@@ -292,4 +293,162 @@ test('normalizeStop: 去空白、去空串、去重并保持顺序', () => {
 
 test('normalizeStop: 空输入返回空数组', () => {
   assert.deepEqual(normalizeStop([]), [])
+})
+
+/* ---------- 维度合成(1.1.0,规范 7.3) ---------- */
+
+test('validateStrategyTable: dimension 须为四维之一', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [{ label: 'a', dimension: 'mood', strategy: { temperature: 0.5 } } as StrategyRule],
+  })
+  assert.deepEqual(validateStrategyTable(value), ['strategies.rules[0].dimension 须为 tone、length、structure、language 之一'])
+})
+
+test('resolveStrategy: 缺省 dimension 归 tone', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [{ label: 'a', strategy: { injection: 'Tone text.' } }],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9]))
+  assert.equal(resolved.strategy.injection, 'Tone text.')
+  assert.equal(resolved.injections.tone, 'Tone text.')
+  assert.equal(resolved.injections.length, '')
+  assert.equal(resolved.injections.structure, '')
+  assert.equal(resolved.injections.language, '')
+})
+
+test('resolveStrategy: 同维度按 priority 覆盖,后合并者整体顶掉先合并者', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [
+      { label: 'a', priority: 1, dimension: 'tone', strategy: { injection: '先合并的语气。' } },
+      { label: 'b', priority: 10, dimension: 'tone', strategy: { injection: '后合并的语气。' } },
+    ],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9], ['b', 0.9]))
+  assert.equal(resolved.injections.tone, '后合并的语气。')
+  assert.equal(resolved.strategy.injection, '后合并的语气。')
+})
+
+test('resolveStrategy: 同维度同级按 rules 数组顺序,后出现者后合并', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [
+      { label: 'a', priority: 10, dimension: 'length', strategy: { injection: '先声明的长度。' } },
+      { label: 'b', priority: 10, dimension: 'length', strategy: { injection: '后声明的长度。' } },
+    ],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9], ['b', 0.9]))
+  assert.equal(resolved.injections.length, '后声明的长度。')
+})
+
+test('resolveStrategy: 跨维度互不覆盖,按 tone→length→structure→language 拼接', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [
+      { label: 'b', priority: 20, dimension: 'structure', strategy: { injection: '结构要求。' } },
+      { label: 'a', priority: 10, dimension: 'tone', strategy: { injection: '语气要求。' } },
+      { label: 'c', priority: 30, dimension: 'language', strategy: { injection: '语言要求。' } },
+      { label: 'd', priority: 15, dimension: 'length', strategy: { injection: '长度要求。' } },
+    ],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9], ['b', 0.9], ['c', 0.9], ['d', 0.9]))
+  assert.equal(resolved.strategy.injection, '语气要求。\n\n长度要求。\n\n结构要求。\n\n语言要求。')
+  // matched 按合并顺序(priority 升序),注入顺序由维度拼接决定,两者独立
+  assert.deepEqual(resolved.matched, ['a', 'd', 'b', 'c'])
+})
+
+test('resolveStrategy: 兜底策略的 injection 归 tone 维,可被 tone 维规则覆盖', () => {
+  const baseOnly = table({
+    id: 'daily',
+    version: '1.1.0',
+    base: { injection: '兜底文案。' },
+    rules: [{ label: 'a', dimension: 'length', strategy: { injection: '长度要求。' } }],
+  })
+  const base = resolveStrategy(baseOnly, labels(['a', 0.9]))
+  assert.equal(base.strategy.injection, '兜底文案。\n\n长度要求。')
+
+  const overridden = resolveStrategy(table({
+    id: 'daily',
+    version: '1.1.0',
+    base: { injection: '兜底文案。' },
+    rules: [{ label: 'a', dimension: 'tone', strategy: { injection: '覆盖兜底的语气。' } }],
+  }), labels(['a', 0.9]))
+  assert.equal(overridden.injections.tone, '覆盖兜底的语气。')
+  assert.equal(overridden.strategy.injection, '覆盖兜底的语气。')
+})
+
+test('resolveStrategy: 语言维规则的注入只在文案语言与输入语言一致时生效', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [
+      { label: 'a', dimension: 'language', strategy: { maxTokens: 2048, injection: '术语用中文,专有名词保留原文。' } },
+    ],
+  })
+  const zh = resolveStrategy(value, labels(['a', 0.9]), { lang: 'zh' })
+  assert.equal(zh.injections.language, '术语用中文,专有名词保留原文。')
+  assert.equal(zh.strategy.maxTokens, 2048)
+
+  const en = resolveStrategy(value, labels(['a', 0.9]), { lang: 'en' })
+  // lang 门只作用于 injection,其余字段照常合并
+  assert.equal(en.injections.language, '')
+  assert.equal(en.strategy.maxTokens, 2048)
+  assert.equal(en.strategy.injection, '')
+  assert.deepEqual(en.matched, ['a'])
+})
+
+test('resolveStrategy: 英文文案的语言维规则对英文输入生效', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [
+      { label: 'a', dimension: 'language', strategy: { injection: 'Keep terminology in English.' } },
+    ],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9]), { lang: 'en' })
+  assert.equal(resolved.injections.language, 'Keep terminology in English.')
+})
+
+test('resolveStrategy: 未给出 lang 时不做语言维门控', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.1.0',
+    rules: [{ label: 'a', dimension: 'language', strategy: { injection: '术语用中文。' } }],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9]))
+  assert.equal(resolved.injections.language, '术语用中文。')
+})
+
+test('composeInjection: 对比示例插在形状维之后、语言维之前', () => {
+  const composed = composeInjection(
+    { tone: '语气要求。', length: '长度要求。', structure: '', language: '语言要求。' },
+    '正例:短回答。\n反例:长回答。',
+  )
+  assert.equal(composed, '语气要求。\n\n长度要求。\n\n正例:短回答。\n反例:长回答。\n\n语言要求。')
+})
+
+test('composeInjection: 不传对比示例时就是四维固定顺序拼接', () => {
+  const composed = composeInjection({ tone: '', length: '', structure: '结构要求。', language: '' })
+  assert.equal(composed, '结构要求。')
+})
+
+test('resolveStrategy: 1.0.0 包全部规则落在同一维度,合成结果与旧口径一致', () => {
+  const value = table({
+    id: 'daily',
+    version: '1.0.0',
+    base: { injection: '兜底文案。' },
+    rules: [
+      { label: 'a', priority: 1, strategy: { injection: '先合并的注入。' } },
+      { label: 'b', priority: 5, strategy: { injection: '后合并的注入。' } },
+    ],
+  })
+  const resolved = resolveStrategy(value, labels(['a', 0.9], ['b', 0.9]))
+  assert.equal(resolved.strategy.injection, '后合并的注入。')
 })

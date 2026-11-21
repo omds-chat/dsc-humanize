@@ -1,12 +1,14 @@
 import { buildInjection } from '../humanize/injection/builder.js'
+import { buildContrastText } from '../humanize/injection/examples.js'
 import { classifyIntent, DEFAULT_MIN_CONFIDENCE } from '../humanize/intent/rule-classifier.js'
-import { resolveStrategy } from '../humanize/strategy/engine.js'
+import { composeInjection, resolveStrategy } from '../humanize/strategy/engine.js'
 import type {
   AssetContents,
   ClassifyInput,
   InjectionResult,
   IntentResult,
   ResolvedStrategy,
+  StrategyResolution,
   StrategyTable,
 } from '../humanize/types.js'
 import type { ChatBeforeRequestHandler, ChatRequestPatch } from '../types.js'
@@ -109,16 +111,17 @@ export const createBeforeRequestHandler = (
     const persona = personas[0]
     const fragments = (contents.injection?.items ?? []).map((item) => item.text)
 
-    let strategy: ResolvedStrategy
+    let strategy: StrategyResolution
     let injection: InjectionResult
     try {
       const intent = classifier.classify({ text: preview.lastUserMessage, labels })
-      strategy = resolveStrategy(table, intent.labels).strategy
+      // 语言判定分量交给策略引擎:语言维规则的注入只在文案语言与输入语言一致时生效
+      strategy = resolveStrategy(table, intent.labels, { lang: intent.lang })
       // 宿主只给最后一条用户消息,拿不到已有系统提示词;以空串为起点,
       // 由宿主把结果追加到现有提示词之后
       injection = buildInjection({
         ...(persona === undefined ? {} : { personaPrefix: persona.prefix }),
-        injection: strategy.injection,
+        injection: composeInjection(strategy.injections, buildContrastText(contents.examples?.items ?? [])),
         fragments,
         existingPrompt: '',
       })
@@ -127,6 +130,6 @@ export const createBeforeRequestHandler = (
       return null
     }
 
-    return toPatch(strategy, injection)
+    return toPatch(strategy.strategy, injection)
   }
 }

@@ -4,6 +4,7 @@ import test from 'node:test'
 import { readAssetPackage } from '../../src/humanize/assets/loader.ts'
 import { createHumanizeKernel } from '../../src/humanize/kernel.ts'
 import { createRuleClassifier } from '../../src/humanize/intent/rule-classifier.ts'
+import { composeInjection } from '../../src/humanize/strategy/engine.ts'
 import type {
   AssetContents,
   AssetSourceRef,
@@ -259,4 +260,187 @@ test('createHumanizeKernel: 加载后的资产包可以直接作为装配输入'
     plan.attribution.map((entry) => entry.source.id),
     ['dsc-example-asset', 'dsc-example-asset', 'dsc-example-asset', 'dsc-example-asset'],
   )
+})
+
+/* ---------- 1.1.0:维度合成、对比示例与 (lang, shape) 解耦 ---------- */
+
+
+/** 与模板示例包 strategy-dimensions 同形的策略表 */
+const dimensionTable = (): StrategyTable => ({
+  id: 'dimension-strategy',
+  version: '1.1.0',
+  base: { temperature: 0.6 },
+  rules: [
+    { label: 'daily-chat', priority: 10, dimension: 'tone', strategy: { injection: '语气克制,不堆客套。' } },
+    { label: 'daily-chat', priority: 10, dimension: 'length', strategy: { injection: '回答尽量短,先结论后理由。' } },
+    { label: 'code-help', priority: 20, dimension: 'structure', strategy: { injection: '先给可运行的最小示例,再解释。' } },
+    {
+      label: 'code-help',
+      priority: 20,
+      dimension: 'language',
+      strategy: { maxTokens: 2048, injection: '术语用中文,专有名词保留原文。' },
+    },
+  ],
+})
+
+const chatAndCode: readonly LabelDefinition[] = [
+  { id: 'daily-chat', keywords: ['聊天'] },
+  { id: 'code-help', keywords: ['代码'] },
+]
+
+test('createHumanizeKernel: 维度合成按固定顺序拼接,互不覆盖', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: {
+      labels: { source: sourceOf('dsc-labels'), items: chatAndCode },
+      strategies: { source: sourceOf('dsc-strategies'), items: [dimensionTable()] },
+    },
+  })
+  const plan = await kernel.plan('这段代码报错了,帮我看看')
+
+  assert.deepEqual(plan.strategy.matched, ['code-help', 'code-help'])
+  assert.equal(plan.strategy.injections.structure, '先给可运行的最小示例,再解释。')
+  assert.equal(plan.strategy.injections.language, '术语用中文,专有名词保留原文。')
+  assert.equal(plan.injection.prompt, '先给可运行的最小示例,再解释。\n\n术语用中文,专有名词保留原文。')
+})
+
+test('createHumanizeKernel: 同维度同级按 rules 数组顺序,后出现者覆盖', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: {
+      labels: { source: sourceOf('dsc-labels'), items: chatAndCode },
+      strategies: {
+        source: sourceOf('dsc-strategies'),
+        items: [{
+          id: 'dimension-strategy',
+          version: '1.1.0',
+          rules: [
+            { label: 'daily-chat', priority: 10, dimension: 'tone', strategy: { injection: '先声明的语气。' } },
+            { label: 'daily-chat', priority: 10, dimension: 'tone', strategy: { injection: '后声明的语气。' } },
+            { label: 'daily-chat', priority: 10, dimension: 'length', strategy: { injection: '长度要求。' } },
+          ],
+        }],
+      },
+    },
+  })
+  const plan = await kernel.plan('陪我聊天')
+  assert.equal(plan.injection.prompt, '后声明的语气。\n\n长度要求。')
+})
+
+const contrastExample = {
+  id: 'over-brief-contrast',
+  name: '简洁边界对比',
+  cases: [
+    { scene: '一句话能答完的事实问题', negative: '这个问题其实可以从多个角度来看……', positive: '支持。需要细节的话我再展开。' },
+  ],
+}
+
+test('createHumanizeKernel: 纯对比示例包的规划把正反例注入提示词', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: { examples: { source: sourceOf('dsc-contrast'), items: [contrastExample] } },
+  })
+  const plan = await kernel.plan('支持吗?', 'Existing prompt.')
+
+  assert.equal(plan.intent.primary, null)
+  assert.equal(
+    plan.injection.prompt,
+    'Existing prompt.\n\n场景:一句话能答完的事实问题\n正例:支持。需要细节的话我再展开。\n反例:这个问题其实可以从多个角度来看……',
+  )
+  assert.deepEqual(plan.attribution.map((entry) => entry.type), ['examples'])
+})
+
+test('createHumanizeKernel: 对比示例插在形状维之后、语言维之前', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: {
+      labels: { source: sourceOf('dsc-labels'), items: chatAndCode },
+      strategies: { source: sourceOf('dsc-strategies'), items: [dimensionTable()] },
+      examples: { source: sourceOf('dsc-contrast'), items: [contrastExample] },
+    },
+  })
+  const plan = await kernel.plan('这段代码报错了,帮我看看')
+
+  assert.equal(
+    plan.injection.prompt,
+    '先给可运行的最小示例,再解释。\n\n'
+      + '场景:一句话能答完的事实问题\n正例:支持。需要细节的话我再展开。\n反例:这个问题其实可以从多个角度来看……\n\n'
+      + '术语用中文,专有名词保留原文。',
+  )
+})
+
+test('createHumanizeKernel: 英文消息命中形状但不注入中文语言维文案,语言维归 lang', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: {
+      labels: {
+        source: sourceOf('dsc-labels'),
+        items: [
+          { id: 'code-help', keywords: ['code'] },
+        ],
+      },
+      strategies: { source: sourceOf('dsc-strategies'), items: [dimensionTable()] },
+    },
+  })
+  const plan = await kernel.plan('this code snippet throws an error, please help')
+
+  // 形状维照常命中并注入
+  assert.deepEqual(plan.strategy.matched, ['code-help', 'code-help'])
+  assert.equal(plan.strategy.injections.structure, '先给可运行的最小示例,再解释。')
+  // 语言维的中文文案被 lang 门拦下
+  assert.equal(plan.strategy.injections.language, '')
+  assert.equal(plan.injection.prompt, '先给可运行的最小示例,再解释。')
+  assert.equal(plan.intent.lang, 'en')
+})
+
+test('createHumanizeKernel: 中文消息的语言维文案照常注入', async () => {
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: {
+      labels: { source: sourceOf('dsc-labels'), items: chatAndCode },
+      strategies: { source: sourceOf('dsc-strategies'), items: [dimensionTable()] },
+    },
+  })
+  const plan = await kernel.plan('这段代码报错了,帮我看看')
+  assert.equal(plan.intent.lang, 'zh')
+  assert.equal(plan.strategy.injections.language, '术语用中文,专有名词保留原文。')
+})
+
+test('createHumanizeKernel: 1.0.0 包在维度合成口径下行为不变', async () => {
+  const loaded = readAssetPackage({
+    metadata: {
+      formatVersion: '1.0.0',
+      id: 'dsc-example-asset',
+      name: '示例资产包',
+      version: '0.1.0',
+      description: '测试用包',
+      author: 'omds-chat',
+      types: ['labels', 'strategies'],
+    },
+    contents: {
+      labels: [{ id: 'tone', keywords: ['please'] }],
+      strategies: [{
+        id: 'daily',
+        version: '1.0.0',
+        base: { injection: 'Base rules.' },
+        rules: [
+          { label: 'tone', priority: 1, strategy: { injection: 'First.' } },
+          { label: 'tone', priority: 5, strategy: { injection: 'Second.' } },
+        ],
+      }],
+    },
+  })
+  assert.equal(loaded.ok, true)
+  if (!loaded.ok) return
+
+  const kernel = createHumanizeKernel({
+    classifier: createRuleClassifier(),
+    contents: loaded.asset.contents,
+  })
+  const plan = await kernel.plan('please', 'Existing.')
+  assert.equal(plan.injection.prompt, 'Existing.\n\nSecond.')
+})
+
+test('createHumanizeKernel: composeInjection 是内核注入拼装的口径', () => {
+  assert.equal(composeInjection({ tone: 'a', length: 'b', structure: '', language: 'c' }), 'a\n\nb\n\nc')
 })

@@ -15,6 +15,10 @@ export interface LabelDefinition {
   description?: string
   /** 关键词,规则分类器使用;资产可以不提供 */
   keywords?: readonly string[]
+  /** 排除词表,先于关键词判定:输入包含任一排除词时该标签不计分(1.1.0 新增) */
+  exclude_keywords?: readonly string[]
+  /** 锚定短语模式,按 ^...$ 整条匹配计一次,与关键词同一计分口径(1.1.0 新增) */
+  patterns?: readonly string[]
   /** 标签权重,折算置信度时使用,缺省为 1 */
   weight?: number
 }
@@ -34,6 +38,8 @@ export interface IntentResult {
   labels: readonly IntentLabel[]
   /** 置信度最高的标签,无可信标签时为 null */
   primary: IntentLabel | null
+  /** 语言判定分量(规范 3.3):输入以中文为主为 zh,以英文为主为 en */
+  lang: 'zh' | 'en'
   /** 产出该结果的分类器 id */
   classifier: string
 }
@@ -78,6 +84,12 @@ export interface HumanizeStrategy {
   injection?: string
 }
 
+/** 注入的作用维度,固定四维;数组顺序即跨维度拼接顺序(规范 7.3) */
+export const DIMENSION_ORDER = ['tone', 'length', 'structure', 'language'] as const
+
+/** 注入作用维度的标识 */
+export type InjectionDimension = (typeof DIMENSION_ORDER)[number]
+
 /** 资产提供的一条标签到策略的映射 */
 export interface StrategyRule {
   /** 标签 id,须在资产包的标签集内 */
@@ -86,6 +98,8 @@ export interface StrategyRule {
   priority?: number
   /** 仅当该标签的置信度不低于此值时生效,缺省 0 */
   minConfidence?: number
+  /** 注入的作用维度,缺省 tone(1.1.0 新增) */
+  dimension?: InjectionDimension
   strategy: HumanizeStrategy
 }
 
@@ -106,6 +120,7 @@ export interface ResolvedStrategy {
   topP: number | null
   maxTokens: number | null
   stop: readonly string[]
+  /** 各维度按固定顺序拼接后的注入文本 */
   injection: string
 }
 
@@ -115,6 +130,8 @@ export interface StrategyResolution {
   /** 命中的标签,按合并顺序 */
   matched: readonly string[]
   tableVersion: string
+  /** 各维度的注入文本,空串表示该维没有注入;strategy.injection 是四维按固定顺序拼接的结果(1.1.0 维度合成) */
+  injections: Record<InjectionDimension, string>
 }
 
 /* ---------- 注入构建 ---------- */
@@ -157,12 +174,12 @@ export interface InjectionResult {
 /* ---------- 资产:内容与来源 ---------- */
 
 /**
- * 四类内容的标识,顺序与资产包格式规范 3.1 一致。
+ * 五类内容的标识,顺序与资产包格式规范 3.1 一致。
  * 类型集合固定:每一类对应内核里一处装配点,扩展类型属内核版本变更。
  */
-export const CONTENT_TYPES = ['persona', 'labels', 'strategies', 'injection'] as const
+export const CONTENT_TYPES = ['persona', 'labels', 'strategies', 'injection', 'examples'] as const
 
-/** 内容类型标识:人物设定、分类标签集、策略规则、注入文本 */
+/** 内容类型标识:人物设定、分类标签集、策略规则、注入文本、对比示例 */
 export type ContentType = (typeof CONTENT_TYPES)[number]
 
 /** 人物设定,属于人性化资产 */
@@ -183,6 +200,26 @@ export interface InjectionFragment {
   text: string
   /** 语义说明,资产可以不提供 */
   description?: string
+}
+
+/** 对比条目:成对的正面与反面回答(规范 7.5) */
+export interface ContrastCase {
+  /** 触发该对比的场合说明,资产可以不提供 */
+  scene?: string
+  /** 反例:不符合期望的回答 */
+  negative: string
+  /** 正例:符合期望的回答 */
+  positive: string
+}
+
+/** 对比示例(few-shot),1.1.0 起的第五类内容;装配时并入注入环节 */
+export interface ContrastExample {
+  id: string
+  name: string
+  /** 语义说明,资产可以不提供 */
+  description?: string
+  /** 成对的正面与反面回答,至少一项 */
+  cases: readonly ContrastCase[]
 }
 
 /**
@@ -206,13 +243,14 @@ export interface AssetContent<TItem> {
 
 /**
  * 按类型划分的资产内容。
- * 出现键表示这一类有来源,缺键表示这一类没有内容;四类可以来自不同的来源,由调用方选定。
+ * 出现键表示这一类有来源,缺键表示这一类没有内容;五类可以来自不同的来源,由调用方选定。
  */
 export interface AssetContents {
   persona?: AssetContent<PersonaProfile>
   labels?: AssetContent<LabelDefinition>
   strategies?: AssetContent<StrategyTable>
   injection?: AssetContent<InjectionFragment>
+  examples?: AssetContent<ContrastExample>
 }
 
 /**
@@ -269,6 +307,8 @@ export type AssetLoadErrorCode =
   | 'transport-failed'
   | 'invalid-json'
   | 'invalid-asset'
+  | 'format-version-unsupported'
+  | 'format-version-feature'
 
 /** 资产读取错误 */
 export interface AssetLoadError {
@@ -315,7 +355,7 @@ export interface HumanizePlan {
   intent: IntentResult
   strategy: StrategyResolution
   injection: InjectionResult
-  /** 每一类参与装配的内容来自哪里,按 persona、labels、strategies、injection 排序 */
+  /** 每一类参与装配的内容来自哪里,按 CONTENT_TYPES 的固定顺序排列 */
   attribution: readonly AssetAttribution[]
 }
 

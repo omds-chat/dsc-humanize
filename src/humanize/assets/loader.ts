@@ -11,6 +11,8 @@ import type {
   AssetSource,
   AssetSourceRef,
   AssetTextTransport,
+  ContrastCase,
+  ContrastExample,
   ContentType,
   HumanizeStrategy,
   InjectionFragment,
@@ -68,6 +70,56 @@ const failContent = <TItem>(message: string, path: string): ContentReadResult<TI
   error: { code: 'invalid-asset', message, path },
 })
 
+/* ---------- 格式版本与特性门(规范第八节、第十节) ---------- */
+
+/** 内核支持的主版本;主版本不同显式拒绝,不做静默升级 */
+const SUPPORTED_MAJOR = 1
+
+/** 1.1.0 起开放的特性:examples 类型、exclude_keywords、patterns、dimension */
+const FEATURE_VERSION: readonly [number, number, number] = [1, 1, 0]
+
+const FORMAT_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/
+
+const parseFormatVersion = (value: string): [number, number, number] | null => {
+  const match = FORMAT_VERSION_PATTERN.exec(value)
+  if (match === null) return null
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+const atLeast = (version: readonly number[], base: readonly number[]): boolean => {
+  for (let index = 0; index < 3; index += 1) {
+    const left = version[index] ?? 0
+    const right = base[index] ?? 0
+    if (left !== right) return left > right
+  }
+  return true
+}
+
+/**
+ * 特性按版本判定的装配参数。
+ * 判定所用版本缺省取包声明的 formatVersion(自动识别),与模板校验器的口径一致。
+ */
+interface FeatureGate {
+  allowsNewFeatures: boolean
+  formatVersion: string
+}
+
+/** 已装配内容没有版本语境:结构校验照常,版本门不生效 */
+const NO_FEATURE_GATE: FeatureGate = { allowsNewFeatures: true, formatVersion: '' }
+
+const featureGateFailure = <TItem>(what: string, gate: FeatureGate, path: string): ContentReadResult<TItem> => ({
+  ok: false,
+  error: {
+    code: 'format-version-feature',
+    message: what + ' 是 1.1.0 新增的特性;按格式版本 ' + gate.formatVersion + ' 判定时不允许使用,应改按 1.1.0 或更高版本判定',
+    path,
+  },
+})
+
+// 组织惯例:锚定短语模式一律 ^...$,不带内联 flags。(?i)、(?im-x)、(?i:...) 都是 flags;
+// (?:、(?<、(?=、(?! 不在此列。
+const INLINE_FLAG_PATTERN = /\(\?[a-z]+(?:-[a-z]+)?[:)]/
+
 /**
  * 读取人物设定。
  * 只校验内核消费的字段:标识、展示名、前缀;同一类型内标识不重复。
@@ -110,9 +162,18 @@ const readPersonaItems = (raw: readonly unknown[], at: string): ContentReadResul
 
 /**
  * 读取分类标签集。
- * 标签集是标签的集合,关键词与权重保持资产给出的值,缺省语义留给分类器。
+ * 标签集是标签的集合,关键词、排除词、锚定模式与权重保持资产给出的值,缺省语义留给分类器。
+ *
+ * 1.1.0 的结构校验在本层同步:exclude_keywords 必须是非空文本数组且不重复,
+ * patterns 必须是 ^...$ 锚定、不带内联 flags 且可编译的模式数组,且同一词不得
+ * 同时出现在 keywords 与 exclude_keywords 里(排除先行会让该关键词永远失效)。
+ * 这些字段按包声明的 formatVersion 受特性门约束:按 1.0.0 判定的包出现即拒绝。
  */
-const readLabelItems = (raw: readonly unknown[], at: string): ContentReadResult<LabelDefinition> => {
+const readLabelItems = (
+  raw: readonly unknown[],
+  at: string,
+  gate: FeatureGate,
+): ContentReadResult<LabelDefinition> => {
   const items: LabelDefinition[] = []
   const seen = new Set<string>()
 
@@ -138,6 +199,66 @@ const readLabelItems = (raw: readonly unknown[], at: string): ContentReadResult<
       }
     }
 
+    const excludeKeywords = item.exclude_keywords
+    if (excludeKeywords !== undefined) {
+      // 结构校验(规范第八节第 5 步)先行,特性门(第 8 步)最后
+      if (!(Array.isArray(excludeKeywords) && excludeKeywords.every((word) => isNonEmptyText(word)))) {
+        return failContent('标签的 exclude_keywords 必须是非空文本数组', path + '.exclude_keywords')
+      }
+      const seenExcludes = new Set<string>()
+      for (const word of excludeKeywords) {
+        if (seenExcludes.has(word)) {
+          return failContent('排除词重复: ' + word, path + '.exclude_keywords')
+        }
+        seenExcludes.add(word)
+      }
+      if (keywords !== undefined) {
+        const keywordSet = new Set(keywords)
+        for (const word of excludeKeywords) {
+          if (keywordSet.has(word)) {
+            return failContent(
+              '排除词 ' + word + ' 同时出现在 keywords 与 exclude_keywords 里;排除先行会让该关键词永远失效',
+              path + '.exclude_keywords',
+            )
+          }
+        }
+      }
+      if (!gate.allowsNewFeatures) {
+        return featureGateFailure('排除词表(exclude_keywords)', gate, path + '.exclude_keywords')
+      }
+    }
+
+    const patterns = item.patterns
+    if (patterns !== undefined) {
+      if (!(Array.isArray(patterns) && patterns.every(isText))) {
+        return failContent('标签的 patterns 必须是字符串数组', path + '.patterns')
+      }
+      const seenPatterns = new Set<string>()
+      for (let patternIndex = 0; patternIndex < patterns.length; patternIndex += 1) {
+        const patternPath = path + '.patterns[' + patternIndex + ']'
+        // 数组元素已逐项验证为字符串,这里只为收敛索引访问的类型
+        const pattern = patterns[patternIndex] ?? ''
+        if (seenPatterns.has(pattern)) {
+          return failContent('锚定短语模式重复: ' + pattern, patternPath)
+        }
+        seenPatterns.add(pattern)
+        if (!pattern.startsWith('^') || !pattern.endsWith('$')) {
+          return failContent('锚定短语模式必须以 ^ 开头、以 $ 结尾: ' + pattern, patternPath)
+        }
+        if (INLINE_FLAG_PATTERN.test(pattern)) {
+          return failContent('锚定短语模式不允许内联 flags: ' + pattern, patternPath)
+        }
+        try {
+          new RegExp(pattern)
+        } catch {
+          return failContent('锚定短语模式无法编译: ' + pattern, patternPath)
+        }
+      }
+      if (!gate.allowsNewFeatures) {
+        return featureGateFailure('锚定短语模式(patterns)', gate, path + '.patterns')
+      }
+    }
+
     const weight = item.weight
     if (weight !== undefined) {
       if (!(isFiniteNumber(weight) && weight > 0)) {
@@ -149,6 +270,8 @@ const readLabelItems = (raw: readonly unknown[], at: string): ContentReadResult<
       id,
       ...(description === undefined ? {} : { description }),
       ...(keywords === undefined ? {} : { keywords }),
+      ...(excludeKeywords === undefined ? {} : { exclude_keywords: excludeKeywords }),
+      ...(patterns === undefined ? {} : { patterns }),
       ...(weight === undefined ? {} : { weight }),
     })
   }
@@ -161,11 +284,14 @@ const readLabelItems = (raw: readonly unknown[], at: string): ContentReadResult<
  *
  * labelIds 是包内标签集的标识集合;为 null 表示包里没有声明标签集,
  * 此时规则的标签引用留待装配阶段由标签集来源解析,本层不判定。
+ * 规则的 dimension 字段受特性门约束:按 1.0.0 判定的包出现即拒绝;
+ * 取值是否落在四维之内交给 validateStrategyTable。
  */
 const readStrategyItems = (
   raw: readonly unknown[],
   at: string,
   labelIds: ReadonlySet<string> | null,
+  gate: FeatureGate,
 ): ContentReadResult<StrategyTable> => {
   const items: StrategyTable[] = []
   const seen = new Set<string>()
@@ -174,6 +300,7 @@ const readStrategyItems = (
     const path = at + '[' + index + ']'
     const item = raw[index]
     if (!isObject(item)) return failContent('策略规则必须是对象', path)
+    let dimensionGatePath: string | null = null
 
     const id = item.id
     if (!isNonEmptyText(id)) return failContent('策略规则缺少 id', path + '.id')
@@ -201,6 +328,9 @@ const readStrategyItems = (
       if (labelIds !== null && !labelIds.has(label)) {
         return failContent('规则引用了包内未定义的标签: ' + label, rulePath + '.label')
       }
+      if (rule.dimension !== undefined && !gate.allowsNewFeatures && dimensionGatePath === null) {
+        dimensionGatePath = rulePath + '.dimension'
+      }
       if (!isObject(rule.strategy)) return failContent('规则缺少 strategy', rulePath + '.strategy')
     }
 
@@ -215,6 +345,10 @@ const readStrategyItems = (
     const problems = validateStrategyTable(table)
     if (problems.length > 0) {
       return failContent(problems[0] ?? '策略表不合法', path)
+    }
+    // 结构校验全部通过后才做特性判定(规范第八节:第 5 步先于第 8 步)
+    if (dimensionGatePath !== null) {
+      return featureGateFailure('规则维度(dimension)', gate, dimensionGatePath)
     }
 
     items.push(table)
@@ -264,10 +398,84 @@ const readInjectionItems = (
 }
 
 /**
+ * 读取对比示例(1.1.0 新增的第五类,规范 7.5)。
+ * 每项至少一个对比条目;条目的 scene 可选,negative 与 positive 必填且非空。
+ */
+const readExampleItems = (raw: readonly unknown[], at: string): ContentReadResult<ContrastExample> => {
+  const items: ContrastExample[] = []
+  const seen = new Set<string>()
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const path = at + '[' + index + ']'
+    const item = raw[index]
+    if (!isObject(item)) return failContent('对比示例必须是对象', path)
+
+    const id = item.id
+    if (!isNonEmptyText(id)) return failContent('对比示例缺少 id', path + '.id')
+    if (seen.has(id)) return failContent('对比示例 id 重复: ' + id, path + '.id')
+    seen.add(id)
+
+    const name = item.name
+    if (!isNonEmptyText(name)) return failContent('对比示例的 name 不能为空', path + '.name')
+
+    const description = item.description
+    if (description !== undefined && !isText(description)) {
+      return failContent('对比示例的 description 必须是字符串', path + '.description')
+    }
+
+    const cases = item.cases
+    if (!Array.isArray(cases) || cases.length === 0) {
+      return failContent('对比示例的 cases 必须是至少一项的数组', path + '.cases')
+    }
+
+    const entries: ContrastCase[] = []
+    for (let caseIndex = 0; caseIndex < cases.length; caseIndex += 1) {
+      const casePath = path + '.cases[' + caseIndex + ']'
+      const entry = cases[caseIndex]
+      if (!isObject(entry)) return failContent('对比条目必须是对象', casePath)
+
+      const scene = entry.scene
+      if (scene !== undefined && !isNonEmptyText(scene)) {
+        return failContent('对比条目的 scene 若出现则不能为空', casePath + '.scene')
+      }
+
+      const negative = entry.negative
+      if (!isNonEmptyText(negative)) {
+        return failContent('对比条目的 negative 不能为空', casePath + '.negative')
+      }
+
+      const positive = entry.positive
+      if (!isNonEmptyText(positive)) {
+        return failContent('对比条目的 positive 不能为空', casePath + '.positive')
+      }
+
+      entries.push({
+        ...(scene === undefined ? {} : { scene }),
+        negative,
+        positive,
+      })
+    }
+
+    items.push({
+      id,
+      name,
+      ...(description === undefined ? {} : { description }),
+      cases: entries,
+    })
+  }
+
+  return { ok: true, items }
+}
+
+/**
  * 读取一份加载期的包文档,按元数据声明的类型返回内容。
  *
- * 判定顺序:元数据字段、类型声明、声明与内容的双向一致、每类条目的字段与标识唯一、
- * 包内策略规则的标签引用。声明了某类却给不出该类条目、有内容却没声明,都整包拒绝;
+ * 判定顺序:元数据字段、格式版本与主版本、类型声明、声明与内容的双向一致、
+ * 每类条目的字段与标识唯一、包内策略规则的标签引用,最后按包声明的
+ * formatVersion 做特性判定:1.1.0 的新特性(examples、exclude_keywords、patterns、
+ * dimension)只对按 1.1.0 及以上版本判定的包开放,1.0.0 包出现即整包拒绝,
+ * 错误码 format-version-feature 与模板校验器对齐。
+ * 声明了某类却给不出该类条目、有内容却没声明,都整包拒绝;
  * 声明只覆盖内核消费的字段,名称、说明、署名、许可证等展示字段不进入读取结果,
  * 字段是否封闭由资产包格式的校验脚本负责。
  */
@@ -280,6 +488,23 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
   const formatVersion = metadata.formatVersion
   if (!isNonEmptyText(formatVersion)) {
     return fail('invalid-asset', 'formatVersion 必须是非空字符串', 'metadata.formatVersion')
+  }
+
+  const parsedVersion = parseFormatVersion(formatVersion)
+  if (parsedVersion === null) {
+    return fail('invalid-asset', 'formatVersion 必须是三段数字', 'metadata.formatVersion')
+  }
+  if (parsedVersion[0] !== SUPPORTED_MAJOR) {
+    return fail(
+      'format-version-unsupported',
+      '格式版本 ' + formatVersion + ' 与内核支持的主版本 ' + SUPPORTED_MAJOR + ' 不同,不做静默升级',
+      'metadata.formatVersion',
+    )
+  }
+
+  const gate: FeatureGate = {
+    allowsNewFeatures: atLeast(parsedVersion, FEATURE_VERSION),
+    formatVersion,
   }
 
   const id = metadata.id
@@ -300,10 +525,18 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
     const at = 'metadata.types[' + index + ']'
     const type = declared[index]
     if (!isContentType(type)) {
-      return fail('invalid-asset', '类型声明必须是 persona、labels、strategies、injection 之一', at)
+      return fail('invalid-asset', '类型声明必须是 persona、labels、strategies、injection、examples 之一', at)
     }
     if (types.includes(type)) return fail('invalid-asset', '类型声明重复: ' + type, at)
     types.push(type)
+  }
+
+  if (!gate.allowsNewFeatures && types.includes('examples')) {
+    return fail(
+      'format-version-feature',
+      '对比示例类型(examples)是 1.1.0 新增的特性;按格式版本 ' + formatVersion + ' 判定时不允许使用,应改按 1.1.0 或更高版本判定',
+      'metadata.types',
+    )
   }
 
   const raw = value.contents
@@ -311,7 +544,7 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
 
   for (const key of Object.keys(raw)) {
     if (!isContentType(key)) {
-      return fail('invalid-asset', 'contents 出现四类之外的类型: ' + key, 'contents.' + key)
+      return fail('invalid-asset', 'contents 出现五类之外的类型: ' + key, 'contents.' + key)
     }
     if (!types.includes(key)) {
       return fail('invalid-asset', '包内出现未声明的类型: ' + key, 'contents.' + key)
@@ -346,7 +579,7 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
     }
 
     if (type === 'labels') {
-      const result = readLabelItems(entries, at)
+      const result = readLabelItems(entries, at, gate)
       if (!result.ok) return { ok: false, error: result.error }
       labelIds = new Set(result.items.map((item) => item.id))
       contents.labels = { source, items: result.items }
@@ -354,9 +587,16 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
     }
 
     if (type === 'strategies') {
-      const result = readStrategyItems(entries, at, labelIds)
+      const result = readStrategyItems(entries, at, labelIds, gate)
       if (!result.ok) return { ok: false, error: result.error }
       contents.strategies = { source, items: result.items }
+      continue
+    }
+
+    if (type === 'examples') {
+      const result = readExampleItems(entries, at)
+      if (!result.ok) return { ok: false, error: result.error }
+      contents.examples = { source, items: result.items }
       continue
     }
 
@@ -384,7 +624,8 @@ export type AssetContentsReadResult =
  * 读取一份已装配的内容:按类型给出条目与来源。
  *
  * 当前使用快照与导入路径最终都收敛成这一形状,因此校验复用包文档的逐类读取器:
- * 出现的类型必须在四类之内,每一类都要有来源标识与至少一个条目。
+ * 出现的类型必须在五类之内,每一类都要有来源标识与至少一个条目。
+ * 快照没有版本语境:1.1.0 的字段按结构校验照常收下,版本门只在包文档路径生效。
  * 跨类型的标签引用不在这里判定:快照可以由多个来源组合而成,
  * 冲突由用户处理(2.9.1),读取层不替用户仲裁。
  */
@@ -393,7 +634,7 @@ export const readAssetContents = (value: unknown): AssetContentsReadResult => {
 
   for (const key of Object.keys(value)) {
     if (!isContentType(key)) {
-      return failure('invalid-asset', '出现四类之外的类型: ' + key, 'contents.' + key)
+      return failure('invalid-asset', '出现五类之外的类型: ' + key, 'contents.' + key)
     }
   }
 
@@ -442,7 +683,7 @@ export const readAssetContents = (value: unknown): AssetContentsReadResult => {
     }
 
     if (type === 'labels') {
-      const result = readLabelItems(items, at + '.items')
+      const result = readLabelItems(items, at + '.items', NO_FEATURE_GATE)
       if (!result.ok) return { ok: false, error: result.error }
       contents.labels = { source: claimed, items: result.items }
       continue
@@ -450,9 +691,16 @@ export const readAssetContents = (value: unknown): AssetContentsReadResult => {
 
     if (type === 'strategies') {
       // 标签引用留待装配阶段由标签集来源解析,与包文档读取的口径一致
-      const result = readStrategyItems(items, at + '.items', null)
+      const result = readStrategyItems(items, at + '.items', null, NO_FEATURE_GATE)
       if (!result.ok) return { ok: false, error: result.error }
       contents.strategies = { source: claimed, items: result.items }
+      continue
+    }
+
+    if (type === 'examples') {
+      const result = readExampleItems(items, at + '.items')
+      if (!result.ok) return { ok: false, error: result.error }
+      contents.examples = { source: claimed, items: result.items }
       continue
     }
 

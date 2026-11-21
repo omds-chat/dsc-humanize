@@ -6,6 +6,7 @@ import {
   ruleClassifier,
   scoreLabels,
 } from '../../src/humanize/intent/rule-classifier.ts'
+import { detectLanguage } from '../../src/humanize/intent/lang.ts'
 import type { LabelDefinition } from '../../src/humanize/types.ts'
 
 /** 置信度按公式计算,浮点比较留一点余量 */
@@ -142,4 +143,125 @@ test('ruleClassifier: 默认实例可直接使用', async () => {
   })
   assert.equal(ruleClassifier.id, 'rule-keyword')
   assert.equal(result.primary?.label, 'tone')
+})
+
+/* ---------- 排除词(1.1.0,规范 7.2) ---------- */
+
+test('scoreLabels: 命中排除词的标签直接不计分', () => {
+  const scored = scoreLabels('帮我安装依赖', [
+    { id: 'code-help', keywords: ['依赖'], exclude_keywords: ['安装依赖'] },
+    { id: 'env-setup', keywords: ['安装'] },
+  ])
+  // code-help 被「安装依赖」排除,只剩 env-setup
+  assert.deepEqual(scored.map((item) => item.label), ['env-setup'])
+})
+
+test('scoreLabels: 排除词命中时关键词再多也不计分', () => {
+  const scored = scoreLabels('帮我安装依赖,代码报错了', [
+    { id: 'code-help', keywords: ['代码', '报错', '依赖'], exclude_keywords: ['安装依赖'] },
+  ])
+  assert.deepEqual(scored, [])
+})
+
+test('scoreLabels: 未命中排除词时照常计分', () => {
+  const scored = scoreLabels('这段代码有报错', [
+    { id: 'code-help', keywords: ['代码', '报错'], exclude_keywords: ['安装依赖'] },
+  ])
+  assert.equal(scored.length, 1)
+  closeTo(scored[0]?.confidence ?? 0, 2 / 3)
+})
+
+test('scoreLabels: 排除词匹配忽略大小写与首尾空白', () => {
+  const scored = scoreLabels('please uninstall deps', [
+    { id: 'tone', keywords: ['please'], exclude_keywords: ['  UNINSTALL DEPS  '] },
+  ])
+  assert.deepEqual(scored, [])
+})
+
+test('scoreLabels: 空白排除词被忽略', () => {
+  const scored = scoreLabels('please', [{ id: 'tone', keywords: ['please'], exclude_keywords: ['', '   '] }])
+  assert.equal(scored.length, 1)
+})
+
+/* ---------- 锚定短语模式(1.1.0,规范 7.2) ---------- */
+
+test('scoreLabels: 模式整条匹配计一次,与关键词同一计分口径', () => {
+  const scored = scoreLabels('帮我写个排序代码', [
+    { id: 'code-help', keywords: ['代码'], patterns: ['^帮我(写|改|看).*(代码|脚本)$'] },
+  ])
+  assert.equal(scored.length, 1)
+  // 关键词 1 次 + 模式 1 次 = 2 次命中
+  closeTo(scored[0]?.confidence ?? 0, 2 / 3)
+})
+
+test('scoreLabels: 顺带提到关键词的整句不命中锚定模式', () => {
+  const scored = scoreLabels('我想看看那篇讲代码风格的文章', [
+    { id: 'code-help', patterns: ['^帮我(写|改|看).*(代码|脚本)$'] },
+  ])
+  assert.deepEqual(scored, [])
+})
+
+test('scoreLabels: 只有模式命中时也返回标签', () => {
+  const scored = scoreLabels('帮我改脚本', [{ id: 'code-help', patterns: ['^帮我(写|改|看).*(代码|脚本)$'] }])
+  assert.equal(scored.length, 1)
+  closeTo(scored[0]?.confidence ?? 0, 0.5)
+})
+
+test('scoreLabels: 模式匹配忽略大小写', () => {
+  const scored = scoreLabels('Help me write some CODE', [{ id: 'code-help', patterns: ['^help me write.*code$'] }])
+  assert.equal(scored.length, 1)
+})
+
+test('scoreLabels: 无法编译的模式被跳过而不是抛错', () => {
+  const scored = scoreLabels('帮我写代码', [{ id: 'code-help', patterns: ['^帮我写[代码$'] }])
+  assert.deepEqual(scored, [])
+})
+
+test('scoreLabels: 重复的模式只计一次', () => {
+  const once = scoreLabels('帮我写代码', [{ id: 'a', patterns: ['^帮我写.*$'] }])
+  const twice = scoreLabels('帮我写代码', [{ id: 'a', patterns: ['^帮我写.*$', '^帮我写.*$'] }])
+  closeTo(once[0]?.confidence ?? 0, 0.5)
+  closeTo(twice[0]?.confidence ?? 0, 0.5)
+})
+
+/* ---------- 语言判定分量(1.1.0,规范 3.3) ---------- */
+
+test('detectLanguage: 纯中文判 zh', () => {
+  assert.equal(detectLanguage('帮我写个脚本'), 'zh')
+})
+
+test('detectLanguage: 纯英文判 en', () => {
+  assert.equal(detectLanguage('please help me write a script'), 'en')
+})
+
+test('detectLanguage: 以中文为主的混合文本判 zh', () => {
+  assert.equal(detectLanguage('帮我写个 script 处理这份数据'), 'zh')
+})
+
+test('detectLanguage: 以英文为主的混合文本判 en', () => {
+  assert.equal(detectLanguage('explain how this 术语 works'), 'en')
+})
+
+test('detectLanguage: 没有可判定字符时缺省判 zh', () => {
+  assert.equal(detectLanguage('123?!'), 'zh')
+  assert.equal(detectLanguage(''), 'zh')
+})
+
+test('classifyIntent: 输出带语言判定分量', async () => {
+  const classifier = createRuleClassifier()
+  const zh = await classifier.classify({ text: '请帮我看看', labels: [label('tone', ['请'])] })
+  assert.equal(zh.lang, 'zh')
+  const en = await classifier.classify({ text: 'please take a look', labels: [label('tone', ['please'])] })
+  assert.equal(en.lang, 'en')
+})
+
+test('classifyIntent: 语言与形状解耦,同一标签集在中英文输入下命中一致而 lang 不同', async () => {
+  const classifier = createRuleClassifier()
+  const labels = [label('brief', ['short', '短'])]
+  const en = await classifier.classify({ text: 'please keep it short', labels })
+  const zh = await classifier.classify({ text: '请保持简短', labels })
+  assert.deepEqual(en.labels.map((item) => item.label), ['brief'])
+  assert.deepEqual(zh.labels.map((item) => item.label), ['brief'])
+  assert.equal(en.lang, 'en')
+  assert.equal(zh.lang, 'zh')
 })

@@ -1,11 +1,14 @@
+import { DIMENSION_ORDER } from '../types.js'
 import type {
   HumanizeStrategy,
+  InjectionDimension,
   IntentLabel,
   ResolvedStrategy,
   StrategyResolution,
   StrategyRule,
   StrategyTable,
 } from '../types.js'
+import { detectLanguage, type LanguageTag } from '../intent/lang.js'
 
 /** 数值字段的取值范围,越界按边界收敛 */
 const TEMPERATURE_MIN = 0
@@ -15,10 +18,21 @@ const TOP_P_MAX = 1
 const MAX_TOKENS_MIN = 1
 const MAX_TOKENS_MAX = 32768
 
-/** 解析策略时额外施加的置信度下限 */
+/** 跨维度拼接注入用的分隔符,与注入构建的缺省分隔符一致 */
+export const DIMENSION_SEPARATOR = '\n\n'
+
+const DIMENSION_SET: ReadonlySet<string> = new Set(DIMENSION_ORDER)
+
+/** 解析策略时额外施加的判定参数 */
 export interface ResolveOptions {
   /** 与规则自身的 minConfidence 取较大值 */
   minConfidence?: number
+  /**
+   * 分类器给出的语言判定分量(规范 3.3)。
+   * 给出时,语言维规则的注入只在规则文案的语言判定与之一致时生效;
+   * 该门只作用于 injection,规则其余字段照常合并。
+   */
+  lang?: LanguageTag
 }
 
 const isFiniteNumber = (value: unknown): value is number =>
@@ -115,6 +129,10 @@ export const validateStrategyTable = (table: StrategyTable): string[] => {
       problems.push(at + '.minConfidence 须为 0 到 1 的有限数')
     }
 
+    if (rule.dimension !== undefined && !DIMENSION_SET.has(rule.dimension)) {
+      problems.push(at + '.dimension 须为 tone、length、structure、language 之一')
+    }
+
     for (const problem of validateStrategy(rule.strategy, at + '.strategy')) problems.push(problem)
   })
 
@@ -122,11 +140,36 @@ export const validateStrategyTable = (table: StrategyTable): string[] => {
 }
 
 /**
- * 把分类结果解析成一条策略。
+ * 形状维注入加上对比示例文本,再拼语言维(拼接口径由内核定,见设计文档 3.4)。
  *
- * 合并顺序:先 base,再按 priority 升序合并命中的规则,priority 相同按声明顺序;
- * 后合并的值覆盖先前的值,injection 只被非空值覆盖。
- * 数值越界按边界收敛,不做静默丢弃。
+ * 对比示例是形状侧的样本约束(规范 3.3、7.5),插在 tone、length、structure
+ * 三个形状维之后、语言维之前;语言维文本最后拼接。各段之间用固定分隔符,
+ * 空段跳过;不传对比示例时结果就是四维按固定顺序的拼接。
+ */
+export const composeInjection = (
+  injections: Record<InjectionDimension, string>,
+  contrastText?: string,
+): string => {
+  const parts = [injections.tone, injections.length, injections.structure]
+  if (contrastText !== undefined && contrastText.trim() !== '') parts.push(contrastText.trim())
+  parts.push(injections.language)
+  return parts.filter((part) => part !== '').join(DIMENSION_SEPARATOR)
+}
+
+/**
+ * 把分类结果解析成一条策略(1.1.0 维度合成口径,规范 7.3)。
+ *
+ * 注入的合成:
+ * - 规则缺省 dimension 归 tone;兜底策略的 injection 也归 tone,先于所有规则合并;
+ * - 同一维度内按 priority 升序合并,priority 相同按规则在 rules 数组中的出现顺序,
+ *   后合并者整体覆盖先合并者;
+ * - 跨维度互不覆盖,strategy.injection 按 tone、length、structure、language 固定顺序拼接,
+ *   各维明细在 resolutions 的 injections 里;
+ * - 语言维受 lang 门约束:给出 lang 时,语言维规则的注入只在规则文案的语言判定
+ *   与输入语言判定一致时生效;门只作用于 injection,其余字段照常合并。
+ *
+ * 其余字段(temperature、topP、maxTokens、stop)不参与维度划分,沿用
+ * 「省略不改,给出即覆盖」的单一合并链。数值越界按边界收敛,不做静默丢弃。
  */
 export const resolveStrategy = (
   table: StrategyTable,
@@ -161,21 +204,39 @@ export const resolveStrategy = (
     stop: [],
     injection: '',
   }
+  const injections: Record<InjectionDimension, string> = { tone: '', length: '', structure: '', language: '' }
 
-  const apply = (source: HumanizeStrategy): void => {
+  const apply = (source: HumanizeStrategy, dimension: InjectionDimension, injectAllowed: boolean): void => {
     if (isFiniteNumber(source.temperature)) merged.temperature = clamp(source.temperature, TEMPERATURE_MIN, TEMPERATURE_MAX)
     if (isFiniteNumber(source.topP)) merged.topP = clamp(source.topP, TOP_P_MIN, TOP_P_MAX)
     if (isFiniteNumber(source.maxTokens)) merged.maxTokens = Math.round(clamp(source.maxTokens, MAX_TOKENS_MIN, MAX_TOKENS_MAX))
     if (Array.isArray(source.stop)) merged.stop = normalizeStop(source.stop)
-    if (typeof source.injection === 'string' && source.injection.trim() !== '') merged.injection = source.injection.trim()
+    if (injectAllowed && typeof source.injection === 'string' && source.injection.trim() !== '') {
+      injections[dimension] = source.injection.trim()
+    }
   }
 
-  if (table.base !== undefined) apply(table.base)
-  for (const entry of active) apply(entry.rule.strategy)
+  // 兜底策略的 injection 归 tone 维,先于所有规则合并,可被 tone 维规则覆盖
+  if (table.base !== undefined) apply(table.base, 'tone', true)
+
+  for (const entry of active) {
+    const dimension: InjectionDimension = entry.rule.dimension ?? 'tone'
+    let injectAllowed = true
+    if (dimension === 'language' && options.lang !== undefined) {
+      const injection = entry.rule.strategy.injection
+      if (typeof injection === 'string' && injection.trim() !== '') {
+        injectAllowed = detectLanguage(injection) === options.lang
+      }
+    }
+    apply(entry.rule.strategy, dimension, injectAllowed)
+  }
+
+  merged.injection = composeInjection(injections)
 
   return {
     strategy: merged,
     matched: active.map((entry) => entry.rule.label),
     tableVersion: table.version,
+    injections,
   }
 }

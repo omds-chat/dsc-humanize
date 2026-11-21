@@ -1,5 +1,6 @@
+import { buildContrastText } from './injection/examples.js'
 import { buildInjection } from './injection/builder.js'
-import { resolveStrategy } from './strategy/engine.js'
+import { composeInjection, resolveStrategy } from './strategy/engine.js'
 import type {
   AssetAttribution,
   AssetContent,
@@ -52,6 +53,7 @@ const describeContents = (contents: AssetContents): readonly AssetAttribution[] 
   describeAttribution('labels', contents.labels),
   describeAttribution('strategies', contents.strategies),
   describeAttribution('injection', contents.injection),
+  describeAttribution('examples', contents.examples),
 ].filter((entry): entry is AssetAttribution => entry !== null)
 
 /**
@@ -59,6 +61,8 @@ const describeContents = (contents: AssetContents): readonly AssetAttribution[] 
  *
  * 每一类内容各取一个来源,来源由调用方选定,内核不设跨包优先级,也不读包;
  * plan 只做纯计算,产出意图、策略、注入片段与来源记录,不接触任何宿主状态。
+ * 注入文本按维度合成(规范 7.3):形状维在前,对比示例插在形状维之后,
+ * 语言维最后拼接(规范 7.5 的对比示例是形状侧的样本约束)。
  * 真正改请求参数与系统提示词需要宿主提供请求拦截能力,本内核不做假设。
  */
 export const createHumanizeKernel = (options: HumanizeKernelOptions): HumanizeKernel => {
@@ -67,16 +71,17 @@ export const createHumanizeKernel = (options: HumanizeKernelOptions): HumanizeKe
   const strategyTable = pickSingle('strategies', contents.strategies)
   const labels = contents.labels?.items ?? []
   const fragments = (contents.injection?.items ?? []).map((item) => item.text)
+  const contrastText = buildContrastText(contents.examples?.items ?? [])
   const position: InjectionPosition | undefined = options.position
 
   return {
     classifierId: options.classifier.id,
     plan: async (text: string, existingPrompt = ''): Promise<HumanizePlan> => {
       const intent = await options.classifier.classify({ text, labels })
-      const strategy = resolveStrategy(strategyTable ?? EMPTY_STRATEGY_TABLE, intent.labels)
+      const strategy = resolveStrategy(strategyTable ?? EMPTY_STRATEGY_TABLE, intent.labels, { lang: intent.lang })
       const injection = buildInjection({
         ...(persona === undefined ? {} : { personaPrefix: persona.prefix }),
-        injection: strategy.strategy.injection,
+        injection: composeInjection(strategy.injections, contrastText),
         fragments,
         existingPrompt,
         ...(position === undefined ? {} : { position }),

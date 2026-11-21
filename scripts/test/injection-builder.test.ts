@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildInjection } from '../../src/humanize/injection/builder.ts'
+import { buildContrastText } from '../../src/humanize/injection/examples.ts'
 
 test('buildInjection: 没有片段也没有已有提示词时结果为空', () => {
   const result = buildInjection({})
@@ -137,4 +138,50 @@ test('buildInjection: 与人设前缀相同的片段被丢弃', () => {
     { reason: 'empty', text: '' },
     { reason: 'duplicate', text: 'Be calm.' },
   ])
+})
+
+/* ---------- 对比示例文本(1.1.0,规范 7.5) ---------- */
+
+
+test('buildContrastText: 场景在最前,正例在前、反例紧随', () => {
+  const text = buildContrastText([{
+    id: 'a',
+    name: 'A',
+    cases: [{ scene: '事实问题', negative: '过长的回答', positive: '简短的回答' }],
+  }])
+  assert.equal(text, '场景:事实问题\n正例:简短的回答\n反例:过长的回答')
+})
+
+test('buildContrastText: 没有场景时省略该行', () => {
+  const text = buildContrastText([{
+    id: 'a',
+    name: 'A',
+    cases: [{ negative: '过长的回答', positive: '简短的回答' }],
+  }])
+  assert.equal(text, '正例:简短的回答\n反例:过长的回答')
+})
+
+test('buildContrastText: 多个条目之间空一行分隔', () => {
+  const text = buildContrastText([{
+    id: 'a',
+    name: 'A',
+    cases: [
+      { scene: 's1', negative: 'n1', positive: 'p1' },
+      { scene: 's2', negative: 'n2', positive: 'p2' },
+    ],
+  }])
+  assert.equal(text, '场景:s1\n正例:p1\n反例:n1\n\n场景:s2\n正例:p2\n反例:n2')
+})
+
+test('buildContrastText: 多个示例项依次拼接', () => {
+  const text = buildContrastText([
+    { id: 'a', name: 'A', cases: [{ negative: 'n1', positive: 'p1' }] },
+    { id: 'b', name: 'B', cases: [{ negative: 'n2', positive: 'p2' }] },
+  ])
+  assert.equal(text, '正例:p1\n反例:n1\n\n正例:p2\n反例:n2')
+})
+
+test('buildContrastText: 没有示例时返回空串', () => {
+  assert.equal(buildContrastText([]), '')
+  assert.equal(buildContrastText([{ id: 'a', name: 'A', cases: [] }]), '')
 })
