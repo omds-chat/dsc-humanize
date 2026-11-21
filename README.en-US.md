@@ -41,6 +41,7 @@ The kernel lands on requests through the host before-request capability: with as
 
 - The kernel is pure computation: it returns the intent, the strategy, prompt fragments and source records, and never writes back to a request or reads host state; landing on a request belongs to the host request hook.
 - The host request capability is available (`chat:request`): the manifest also declares the `chat:before-request` mount point, and activation registers a handler. The handler returns `temperature`, `topP`, `maxTokens`, `stop` and `systemPromptAppend` synchronously; numbers and text lengths are not clamped in the plugin, out-of-range values are converged by the engine against the patch limits; on timeout or a throw the whole patch is dropped and the request goes out with its original parameters.
+- Exclusion with dsc-llm-tune: both rewrite the parameters of the same request, so they cannot be enabled together; the manifest declares `conflicts: ['dsc-llm-tune']` and installing both is rejected by the host. The division of labour is complementary but the two do not coexist: this plugin applies presets from assets, dsc-llm-tune lets the user tune parameters freely; see "Exclusion with dsc-llm-tune" below.
 - Asset loading entry: `setActiveContents` takes the content currently in use by type, in the same shape as the kernel assembly options. On activation the plugin also reads the active-usage snapshot from plugin storage (key `dsc-humanize/snapshot/v1`, shape in design doc 4.6, marked adjustable) and assembles it once it validates; with no snapshot or an invalid one the content stays empty and requests are left unchanged. `importAssetPackage` imports a load-time asset package document from JSON text, replaces the current content only after the whole package validates, and writes the snapshot back when the plugin is active; the editing UI and export are still pending.
 - The asset package format is now defined by `dsc-humanize-asset-template` (format version 1.0.0); the kernel reads by the content types declared in the package metadata, with the declaration and the content agreeing both ways. The import entry is usable (JSON text through `importAssetPackage`), while export and the editing UI are not built yet, so the preset packages from `dsc-humanize-inner-asset` still need converting into a load-time package document before import.
 - The editing UI is not implemented: the plugin has no interface entry yet, so entering, editing and one-to-one export of humanization assets are pending; import is usable, but the caller has to supply JSON text.
@@ -220,6 +221,7 @@ The build also reads [certs/dsc-humanize/dsc-humanize-root-ca.crt](certs/dsc-hum
 | `description` | `dsc.description`, at least `zh-CN` or `en-US` | yes |
 | `repo_link` | `dsc.repo_link` | yes |
 | `dependencies.dsc` | `dsc.engines` | yes |
+| `conflicts` | `dsc.conflicts`, omitted when absent | no |
 | `home_page` | `dsc.home_page`, omitted when absent | no |
 | `attached` | `dsc.attached`, omitted when absent | no |
 
@@ -228,6 +230,7 @@ The `dsc` block in `package.json`:
 ```json
 "dsc": {
   "engines": "^1.0.0",
+  "conflicts": ["dsc-llm-tune"],
   "description": {
     "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
     "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"
@@ -356,8 +359,23 @@ Things to keep in mind:
 - `id` is globally unique; a second plugin with the same id is rejected.
 - `version` is the plugin version and is unrelated to the version in `package.json`.
 - `capabilities` may only contain names from the capability table; unknown or duplicate entries make the install fail.
+- `conflicts` currently holds `dsc-llm-tune`, matching `dsc-humanize` in the other side's manifest; changing one side only removes the exclusion.
 - The DeepSeek-Chat-Enhanced source is the authority for the contract; `src/types.ts` covers only the fields this plugin uses, so check the source for anything else.
 - The full field and validation rules are in [specs/plugin-develop-spec.md](specs/plugin-develop-spec.md); check a manifest with `node scripts/validate-specs.mjs <manifest file>`.
+
+## Exclusion with dsc-llm-tune
+
+This plugin and dsc-llm-tune exclude each other: both rewrite request parameters, so they cannot be enabled together.
+
+| Item | Content |
+|:---:|:---:|
+| Why | Both rewrite the sampling parameters of the same request; patches merge in registration order, later registrations win on scalars, so the final values are not predictable for the user |
+| Division of labour | This plugin applies presets (assets decide what to change); dsc-llm-tune offers free tuning (the user sets each parameter directly) |
+| This side | `conflicts: ['dsc-llm-tune']` in [src/manifest.ts](src/manifest.ts) |
+| Other side | dsc-llm-tune declares `conflicts: ['dsc-humanize']` in its manifest, owned by that repository |
+| Host behaviour | Installing both plugins is rejected, judged from the `conflicts` field |
+
+The two are complementary but do not coexist: use this plugin when you want a shaped assistant and dsc-llm-tune when you need precise control over sampling parameters, switching as needed instead of installing both. Only the manifest's `conflicts` takes effect; the same field in `meta.json`, described under "How meta.json is generated" above, only keeps the artifact consistent with the manifest and is not read when the host derives a manifest from `meta.json`.
 
 ## Capabilities
 

@@ -41,6 +41,7 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 
 - 内核只做纯计算:输出意图、策略、提示词片段与来源记录,不写回任何请求,也不读写宿主状态;落地由宿主请求接线完成。
 - 宿主请求能力已具备(`chat:request`):清单同时声明挂载点 `chat:before-request`,激活时登记处理器;处理器同步返回 `temperature`、`topP`、`maxTokens`、`stop` 与 `systemPromptAppend`,数值与文本长度不在插件里裁剪,越界由引擎按补丁上限收敛;超时或抛错时整份补丁作废,请求按原参数发出。
+- 与 dsc-llm-tune 互斥:两者都改写同一次请求的参数,不能同时启用;清单声明 `conflicts: ['dsc-llm-tune']`,同时安装会被宿主拒绝。职责互补但不并存:本插件按资产给预设,dsc-llm-tune 让用户自由调节参数,详见下文「与 dsc-llm-tune 互斥」。
 - 资产装载入口:`setActiveContents` 按类型接收当前使用的内容,形状与内核装配参数一致。插件激活时还会从插件存储读取当前使用快照(键 `dsc-humanize/snapshot/v1`,形状见设计文档 4.6,标注为可调整),校验通过后装配;没有快照或快照不合法时保持空内容,插件不改请求。`importAssetPackage` 从 JSON 文本导入一份加载期资产包文档,成功才整体替换当前内容,并在已激活时写回快照;资产的编辑界面与导出仍未实现。
 - 资产包格式已由 `dsc-humanize-asset-template` 定义(格式版本 1.0.0),内核按包元数据的类型声明读取,声明与实际内容双向一致;导入入口已可用(JSON 文本交给 `importAssetPackage`),导出与编辑界面尚未实现,`dsc-humanize-inner-asset` 的预设包仍需先转成加载期包文档才能导入。
 - 编辑界面未实现:插件目前没有界面入口,人性化资产的输入、编辑与一比一导出都还没有落地;导入已可用,但需要调用方提供 JSON 文本。
@@ -220,6 +221,7 @@ dist/
 | `description` | `dsc.description`,对象,至少含 `zh-CN` 或 `en-US` | 是 |
 | `repo_link` | `dsc.repo_link` | 是 |
 | `dependencies.dsc` | `dsc.engines` | 是 |
+| `conflicts` | `dsc.conflicts`,缺省则不写 | 否 |
 | `home_page` | `dsc.home_page`,缺省则不写 | 否 |
 | `attached` | `dsc.attached`,缺省则不写 | 否 |
 
@@ -228,6 +230,7 @@ dist/
 ```json
 "dsc": {
   "engines": "^1.0.0",
+  "conflicts": ["dsc-llm-tune"],
   "description": {
     "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
     "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"
@@ -356,8 +359,23 @@ cp .env.example .env
 - `id` 全局唯一,重复安装会被拒绝。
 - `version` 是插件版本,与 `package.json` 中的版本无关。
 - `capabilities` 只写能力表内的名字,未知或重复的能力会让安装被拒绝。
+- `conflicts` 当前写 `dsc-llm-tune`,与对侧清单里的 `dsc-humanize` 互为对应;只改一侧等于没有互斥。
 - 契约以 DeepSeek-Chat-Enhanced 源码为准;`src/types.ts` 只覆盖本插件用到的字段,缺的字段请查源码。
 - 字段与校验规则的完整说明见 [specs/plugin-develop-spec.md](specs/plugin-develop-spec.md),可用 `node scripts/validate-specs.mjs <清单文件>` 校验。
+
+## 与 dsc-llm-tune 互斥
+
+本插件与 dsc-llm-tune 互斥:两者都改写请求参数,不能同时启用。
+
+| 项 | 内容 |
+|:---:|:---:|
+| 互斥原因 | 两者都改写同一次请求的采样参数,补丁按登记顺序合并,标量以后登记者为准,用户无法预测最终取值 |
+| 职责分工 | 本插件提供预设(改什么由资产决定);dsc-llm-tune 提供自由调节(每个参数由用户直接设定) |
+| 本插件一侧 | [src/manifest.ts](src/manifest.ts) 的 `conflicts: ['dsc-llm-tune']` |
+| 另一侧 | dsc-llm-tune 的清单声明 `conflicts: ['dsc-humanize']`,由该仓库负责 |
+| 宿主行为 | 两个插件同时安装会被拒绝(按清单的 `conflicts` 判定) |
+
+职责互补但不并存:需要成型的助手形态时用本插件,需要精确控制采样参数时用 dsc-llm-tune,按需切换而不是同时安装。生效的只有清单里的 `conflicts`;上文「meta.json 生成规则」里的同名字段只用于与清单保持一致,宿主由 `meta.json` 推导清单时并不读它。
 
 ## 能力清单
 
