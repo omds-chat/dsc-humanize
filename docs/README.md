@@ -7,11 +7,12 @@
 
 | 文档 | 职责一句话 | 主要内容 | 什么时候需要读 | 主要读者 |
 |:---:|:---:|:---:|:---:|:---:|
-| [README.md](../README.md) | 本仓库的开发者入口 | 插件定位、当前实现范围、规范与 Schema 的位置、工程结构、构建与自检方式 | 首次进入本仓库、要改源码或构建产物时 | 贡献者、维护者 |
+| [README.md](../README.md) | 本仓库的开发者入口 | 插件定位、已接入宿主请求能力、规范与 Schema 的位置、工程结构、构建与自检方式 | 首次进入本仓库、要改源码或构建产物时 | 贡献者、维护者 |
 | [README.en-US.md](../README.en-US.md) | 上文 README.md 的英文版 | 与中文版同构的英文说明 | 需要英文说明、对外引用仓库说明时 | 贡献者、用户 |
 | [README.user.md](../README.user.md) | 面向插件使用者的说明 | 插件做什么、安装步骤、使用方法、隐私与安全边界 | 安装或使用插件之前 | 用户 |
 | [docs/README.md](README.md) | 本索引:文档总入口 | 文档清单、冲突时的准据、文档分层、维护约定 | 查找任意文档、判断两份文档说法不一致时 | Agent、贡献者、维护者 |
 | [docs/design/kernel-and-assets.md](design/kernel-and-assets.md) | 内核与资产的设计定稿 | 产品定位、内核与资产的边界、按类型声明与按类型组合、资产组合的四条最终规则、内核模块划分与纯计算性质、ONNX 分类器现状、未定稿项与已排除做法 | 改动内核、资产格式、组合与当前使用快照、策略与注入语义时 | 维护者、Agent |
+| [docs/design/asset-market.md](design/asset-market.md) | 人性化资产市场的设计定稿 | 市场的形态与边界、来源模型与标识、取件顺序与信任、签名结论与来源结论、安装语义、更新与卸载、失败与降级、宿主能力现状与候选、未定稿项与已排除做法 | 改动来源配置、取件与校验、安装与更新、判断宿主能力是否够用时 | 维护者、Agent |
 | [specs/README.md](../specs/README.md) | 规范区的索引与差异留痕 | 规范文件清单、权威来源与引用约定、校验命令、与宿主实现的已知差异 | 引用规范、核对两侧口径、运行规范校验时 | 贡献者、维护者、Agent |
 | [specs/plugin-runtime-spec.md](../specs/plugin-runtime-spec.md) | 插件运行时规范 | 产物形态、导出契约、生命周期与超时、能力与限流、上下文成员、安全边界、错误降级 | 写运行时行为、申请能力、对接宿主时 | 贡献者、Agent |
 | [specs/plugin-develop-spec.md](../specs/plugin-develop-spec.md) | 插件开发规范 | 清单字段与校验、版本与依赖、运行时元数据、作者签名与公钥位置、分发要求 | 改清单、改构建产物、发布或分发时 | 贡献者、维护者 |
@@ -28,7 +29,7 @@
 | 1 | 宿主 `dsc-plugin-engine` 的实现 | 清单校验、能力表、限流、加载与签名的实际行为 | 以实现为准;文档与规范都按实现修正 |
 | 2 | 本仓库的规范与 Schema | 宿主实现的可校验副本:`specs/` 两份规范、`schemas/`、`specs/spec-version.json` | 以规范为准;差异记入 [specs/README.md](../specs/README.md) 的「已知差异」,不修改上游文档 |
 | 3 | 脚本与测试的行为 | `scripts/validate-specs.mjs`、`scripts/test/` 下的测试、构建脚本的校验结果 | 脚本与规范冲突时以规范为准并修脚本;脚本拒绝而文档放行时,先按规范定口径,再同时修文档与脚本 |
-| 4 | 设计文档 | [docs/design/kernel-and-assets.md](design/kernel-and-assets.md) 中的已定约束 | 与规范冲突时规范优先;与源码、测试冲突时以设计文档为准,由实现与测试对齐(未定稿条目除外) |
+| 4 | 设计文档 | [docs/design/kernel-and-assets.md](design/kernel-and-assets.md) 与 [docs/design/asset-market.md](design/asset-market.md) 中的已定约束 | 与规范冲突时规范优先;与源码、测试冲突时以设计文档为准,由实现与测试对齐(未定稿条目除外) |
 | 5 | README | [README.md](../README.md)、[README.user.md](../README.user.md)、[README.en-US.md](../README.en-US.md) | 与设计文档冲突时以设计文档为准,并同步修正 README |
 | 6 | 本索引 | 只负责导航与上述优先级说明,不含机制结论 | 与任何被指向的文档冲突时,以被指向的文档为准,并修正本索引 |
 
@@ -43,8 +44,8 @@
 |:---:|:---:|:---:|
 | 对外文档 | [README.user.md](../README.user.md) | 给插件使用者看:做什么、怎么装、怎么用、边界在哪 |
 | 开发者与贡献者文档 | [README.md](../README.md)、[README.en-US.md](../README.en-US.md)、[specs/README.md](../specs/README.md)、[specs/plugin-runtime-spec.md](../specs/plugin-runtime-spec.md)、[specs/plugin-develop-spec.md](../specs/plugin-develop-spec.md) | 给要改本仓库的人看:实现范围、工程结构、规范约束与校验方式 |
-| 维护者文档 | [docs/design/kernel-and-assets.md](design/kernel-and-assets.md) | 记录机制定稿与取舍理由:为什么这样定、排除了哪些做法 |
-| Agent 执行文档 | 本索引、[docs/design/kernel-and-assets.md](design/kernel-and-assets.md)、`specs/` 与 `schemas/` | Agent 的执行依据:先按本索引找文档,再按设计文档的已定约束与规范、Schema 的硬规则动手,改完用 `scripts/` 下的校验与测试自查 |
+| 维护者文档 | [docs/design/kernel-and-assets.md](design/kernel-and-assets.md)、[docs/design/asset-market.md](design/asset-market.md) | 记录机制定稿与取舍理由:为什么这样定、排除了哪些做法 |
+| Agent 执行文档 | 本索引、[docs/design/kernel-and-assets.md](design/kernel-and-assets.md)、[docs/design/asset-market.md](design/asset-market.md)、`specs/` 与 `schemas/` | Agent 的执行依据:先按本索引找文档,再按设计文档的已定约束与规范、Schema 的硬规则动手,改完用 `scripts/` 下的校验与测试自查 |
 
 - 四类读者读到的内容不同:用户只需要对外文档;贡献者需要开发者文档与规范;维护者还要看设计文档的取舍理由;Agent 按第一节的「什么时候需要读」取文档,并按第二节的优先级判断结论。新增文档时先判断它属于哪一层,再决定写多深。
 - 设计文档是唯一记录「为什么这样定」的地方,规范与 README 不复述取舍理由,只给结论与用法。
@@ -52,7 +53,7 @@
 ## 四、维护约定
 
 - 新增或删除文档时,当轮更新本文档第一节的主表:补行、删行、改「职责一句话」与「什么时候需要读」,不留死链。
-- 机制变更当轮更新对应文档,而不是等下一次整理:设计文档的已定约束变化时改 [docs/design/kernel-and-assets.md](design/kernel-and-assets.md);规范变化时先改规范与 Schema 再升版本号;对用户可见的行为变化同步到 [README.md](../README.md) 与 [README.user.md](../README.user.md)。
+- 机制变更当轮更新对应文档,而不是等下一次整理:设计文档的已定约束变化时改对应那篇,[docs/design/kernel-and-assets.md](design/kernel-and-assets.md) 与 [docs/design/asset-market.md](design/asset-market.md) 各管自己的范围;规范变化时先改规范与 Schema 再升版本号;对用户可见的行为变化同步到 [README.md](../README.md) 与 [README.user.md](../README.user.md)。
 - 文档与代码在同一轮内保持一致:已定约束改了就对齐实现与测试,不留下「文档这么写、代码那么做」的状态。
 - 本文档只写职责与定位,不复制正文:文档内容变化时通常不需要改本索引,只有职责、读者或分层变化时才改。
 - 本文档不写时间戳、不写维护进度与计划,也不引入 emoji。
