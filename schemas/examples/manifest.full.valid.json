@@ -19,7 +19,7 @@
     "plugins:storage",
     "chat:request"
   ],
-  "contributions": [
+  "mounts": [
     "session:changed",
     "chat:before-request"
   ]

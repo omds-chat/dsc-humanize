@@ -18,8 +18,8 @@ export type DscCapability =
   | 'net:fetch'
   | 'chat:request'
 
-/** 贡献点:会话切换事件与请求前环节 */
-export type DscContribution = 'session:changed' | 'chat:before-request'
+/** 挂载点:会话切换事件与请求前环节 */
+export type DscMount = 'session:changed' | 'chat:before-request'
 
 /**
  * 插件清单。
@@ -36,7 +36,7 @@ export interface PluginManifest {
   /** 冲突的插件 id,同时安装会被拒绝 */
   conflicts?: string[]
   capabilities: DscCapability[]
-  contributions?: DscContribution[]
+  mounts?: DscMount[]
 }
 
 /** 异步能力的通用选项,取消时抛 PluginAbortError */
@@ -103,7 +103,7 @@ export interface PluginSessionsApi {
  * 返回释放函数,引擎在停用与卸载时自动执行,插件不要自行重复调用。
  */
 export interface PluginEventsApi {
-  on(point: DscContribution, handler: (event: SessionChangedEvent) => void): () => void
+  on(point: DscMount, handler: (event: SessionChangedEvent) => void): () => void
 }
 
 /**

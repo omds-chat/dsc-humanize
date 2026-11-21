@@ -12,7 +12,7 @@ import type {
 } from '../../src/humanize/types.ts'
 import type {
   ChatBeforeRequestHandler,
-  DscContribution,
+  DscMount,
   PluginContext,
   SessionChangedEvent,
 } from '../../src/types.ts'
@@ -52,7 +52,7 @@ const contentsWithoutStrategies = (): AssetContents => ({
 interface FakeContext {
   context: PluginContext
   handlers: ChatBeforeRequestHandler[]
-  eventPoints: DscContribution[]
+  eventPoints: DscMount[]
   logs: string[]
   notices: string[]
 }
@@ -60,7 +60,7 @@ interface FakeContext {
 /** 只实现本插件用到的成员,其余按契约给空实现 */
 const createFakeContext = (): FakeContext => {
   const handlers: ChatBeforeRequestHandler[] = []
-  const eventPoints: DscContribution[] = []
+  const eventPoints: DscMount[] = []
   const logs: string[] = []
   const notices: string[] = []
 
@@ -76,7 +76,7 @@ const createFakeContext = (): FakeContext => {
       rename: () => false,
     },
     events: {
-      on: (point: DscContribution, _handler: (event: SessionChangedEvent) => void) => {
+      on: (point: DscMount, _handler: (event: SessionChangedEvent) => void) => {
         eventPoints.push(point)
         return () => undefined
       },
@@ -117,7 +117,6 @@ const reset = (): void => {
 
 test('activate: 申请 chat:request 并注册请求前处理器', () => {
   reset()
-  setActiveContents(contentsWithAssets())
   const fake = createFakeContext()
 
   activate(fake.context)
@@ -128,9 +127,9 @@ test('activate: 申请 chat:request 并注册请求前处理器', () => {
 
 test('请求前处理器: 有标签集与策略表时返回宿主补丁', () => {
   reset()
-  setActiveContents(contentsWithAssets())
   const fake = createFakeContext()
   activate(fake.context)
+  setActiveContents(contentsWithAssets())
 
   const handler = fake.handlers[0]
   assert.ok(handler !== undefined)
@@ -170,9 +169,9 @@ test('请求前处理器: 没有资产时返回 null,不改请求', () => {
 
 test('请求前处理器: 只有标签集没有策略表时返回 null', () => {
   reset()
-  setActiveContents(contentsWithoutStrategies())
   const fake = createFakeContext()
   activate(fake.context)
+  setActiveContents(contentsWithoutStrategies())
 
   const handler = fake.handlers[0]
   assert.ok(handler !== undefined)
@@ -221,7 +220,6 @@ test('请求前处理器: 策略表给出多个条目时拒绝装配并返回 nu
 
 test('deactivate 后可以重新激活并重新注册处理器', () => {
   reset()
-  setActiveContents(contentsWithAssets())
 
   const first = createFakeContext()
   activate(first.context)
@@ -229,6 +227,7 @@ test('deactivate 后可以重新激活并重新注册处理器', () => {
 
   const second = createFakeContext()
   activate(second.context)
+  setActiveContents(contentsWithAssets())
 
   assert.equal(first.handlers.length, 1)
   assert.equal(second.handlers.length, 1)

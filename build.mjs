@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -24,6 +25,14 @@ const AUTHOR_PUB_FILE = 'author_pub.pem'
  * 作者对 meta.json 的签名已取消,不再产出 meta.json.author.sig。
  */
 const AUTHOR_SIGNED_FILES = [PLUGIN_FILE]
+
+/**
+ * 内嵌到产物的资产根证书路径,相对仓库根目录。
+ * 只读公开证书:根私钥不进仓库,也不进产物。
+ */
+const ROOT_CA_PATH = 'certs/dsc-humanize/dsc-humanize-root-ca.crt'
+/** 产物里必须出现的 PEM 头,用来确认 define 注入没有落空 */
+const ROOT_CA_PEM_HEADER = '-----BEGIN CERTIFICATE-----'
 /** Ed25519 签名长度固定为 64 字节 */
 const ED25519_SIGNATURE_BYTES = 64
 
@@ -343,6 +352,26 @@ const signAuthorFile = async (keyPath, pubPath, name) => {
   return { name, sigName: name + AUTHOR_SIG_SUFFIX, size: info.size }
 }
 
+/* ---------- 内嵌资产根证书 ---------- */
+
+/**
+ * 读取资产根证书 PEM。
+ * 文件缺失或不是 PEM 证书时直接让构建失败:产物缺少锚点就无法校链。
+ */
+const readRootCaPem = async () => {
+  const certPath = path.join(root, ROOT_CA_PATH)
+  let text
+  try {
+    text = await readFile(certPath, 'utf8')
+  } catch (error) {
+    die('缺少内嵌资产根证书 ' + ROOT_CA_PATH + ',该文件必须随仓库提供: ' + error.message)
+  }
+  if (!text.includes(ROOT_CA_PEM_HEADER) || !text.includes('-----END CERTIFICATE-----')) {
+    die('内嵌资产根证书 ' + ROOT_CA_PATH + ' 不是 PEM 证书')
+  }
+  return text.replace(/\r\n?/g, '\n').trim() + '\n'
+}
+
 /* ---------- 构建 ---------- */
 
 await loadDotEnv()
@@ -363,6 +392,18 @@ if (signed) {
   authorKey = await prepareAuthorKey()
 }
 
+// 根证书先读:材料缺失时在产出任何文件之前失败
+const rootCaPem = await readRootCaPem()
+const rootCaBytes = Buffer.from(rootCaPem, 'utf8')
+const rootCaSha256 = createHash('sha256').update(rootCaBytes).digest('hex')
+/** 证书体的一段,用来在产物里确认 define 注入的不是空串 */
+const rootCaAnchor = rootCaPem
+  .split('\n')
+  .filter((line) => line !== '' && !line.startsWith('-----'))
+  .join('')
+  .slice(0, 32)
+if (rootCaAnchor.length < 32) die('内嵌资产根证书内容过短,无法校验产物')
+
 // 打包前清空 dist,避免残留旧产物
 await rm(distDir, { recursive: true, force: true })
 await mkdir(distDir, { recursive: true })
@@ -381,6 +422,10 @@ await build({
   charset: 'utf8',
   legalComments: 'none',
   external: [],
+  define: {
+    // 与主线 rspack 的 __ROOT_CA_PEM__ 同一做法:构建期读文件,写入产物常量
+    __ROOT_CA_PEM__: JSON.stringify(rootCaPem),
+  },
   logLevel: 'warning',
 })
 
@@ -388,6 +433,12 @@ await build({
 const pluginBytes = toLf(await readFile(pluginPath, 'utf8'))
 await writeFile(pluginPath, pluginBytes)
 assertLf(pluginBytes, PLUGIN_FILE)
+
+// 产物自检:根证书必须真的进了 bundle,避免 define 拼错后静默产出空锚点
+const bundledText = pluginBytes.toString('utf8')
+if (!bundledText.includes(ROOT_CA_PEM_HEADER) || !bundledText.includes(rootCaAnchor)) {
+  die('产物里没有找到内嵌的资产根证书,根证书常量注入未生效')
+}
 
 const metaBytes = Buffer.from(JSON.stringify(meta, null, 2) + '\n', 'utf8')
 assertLf(metaBytes, META_FILE)
@@ -436,6 +487,7 @@ console.log('行压缩: ' + (minify ? '开启' : '关闭'))
 console.log('作者签名: ' + (signed
   ? '已启用,' + signatures.map((item) => item.sigName).join(' 与 ') + ' 已用推导出的公钥自检通过'
   : '未启用,不产出 ' + AUTHOR_SIG_SUFFIX + ' 与 ' + AUTHOR_PUB_FILE))
+console.log('资产根证书: 已内嵌 ' + ROOT_CA_PATH + ',' + rootCaBytes.length + ' 字节,sha256 ' + rootCaSha256)
 console.log('换行: LF(文本产物),' + AUTHOR_SIG_SUFFIX + ' 为二进制签名文件')
 console.log('体积: ' + pluginInfo.size + ' 字节 (' + (pluginInfo.size / 1024).toFixed(2) + ' KB),meta ' + metaInfo.size + ' 字节')
 

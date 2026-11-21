@@ -9,6 +9,7 @@ import type {
   AssetPackage,
   AssetRef,
   AssetSource,
+  AssetSourceRef,
   AssetTextTransport,
   ContentType,
   HumanizeStrategy,
@@ -51,10 +52,16 @@ const isContentType = (value: unknown): value is ContentType =>
 const describeError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
-const fail = (code: AssetLoadErrorCode, message: string, path?: string): AssetLoadResult => ({
-  ok: false,
-  error: path === undefined ? { code, message } : { code, message, path },
-})
+/** 失败结果:包文档与已装配内容两条读取路径共用同一套错误形状 */
+type LoadFailure = { ok: false; error: AssetLoadError }
+
+const failure = (code: AssetLoadErrorCode, message: string, path?: string): LoadFailure =>
+  path === undefined
+    ? { ok: false, error: { code, message } }
+    : { ok: false, error: { code, message, path } }
+
+const fail = (code: AssetLoadErrorCode, message: string, path?: string): AssetLoadResult =>
+  failure(code, message, path)
 
 const failContent = <TItem>(message: string, path: string): ContentReadResult<TItem> => ({
   ok: false,
@@ -366,6 +373,96 @@ export const readAssetPackage = (value: unknown): AssetLoadResult => {
   }
 
   return { ok: true, asset }
+}
+
+/** 已装配内容的读取结果 */
+export type AssetContentsReadResult =
+  | { ok: true; contents: AssetContents }
+  | { ok: false; error: AssetLoadError }
+
+/**
+ * 读取一份已装配的内容:按类型给出条目与来源。
+ *
+ * 当前使用快照与导入路径最终都收敛成这一形状,因此校验复用包文档的逐类读取器:
+ * 出现的类型必须在四类之内,每一类都要有来源标识与至少一个条目。
+ * 跨类型的标签引用不在这里判定:快照可以由多个来源组合而成,
+ * 冲突由用户处理(2.9.1),读取层不替用户仲裁。
+ */
+export const readAssetContents = (value: unknown): AssetContentsReadResult => {
+  if (!isObject(value)) return failure('invalid-asset', '内容必须是对象')
+
+  for (const key of Object.keys(value)) {
+    if (!isContentType(key)) {
+      return failure('invalid-asset', '出现四类之外的类型: ' + key, 'contents.' + key)
+    }
+  }
+
+  const contents: AssetContents = {}
+  let declared = 0
+
+  for (const type of CONTENT_TYPES) {
+    const group = value[type]
+    if (group === undefined) continue
+
+    const at = 'contents.' + type
+    if (!isObject(group)) {
+      return failure('invalid-asset', type + ' 必须按来源与条目的形状给出', at)
+    }
+
+    const source = group.source
+    if (!isObject(source)) return failure('invalid-asset', type + ' 缺少来源标识', at + '.source')
+
+    const sourceId = source.id
+    if (!isNonEmptyText(sourceId)) {
+      return failure('invalid-asset', '来源标识的 id 不能为空', at + '.source.id')
+    }
+
+    const sourceVersion = source.version
+    if (sourceVersion !== undefined && !isNonEmptyText(sourceVersion)) {
+      return failure('invalid-asset', '来源标识的 version 若出现则不能为空', at + '.source.version')
+    }
+
+    const items = group.items
+    if (!Array.isArray(items)) {
+      return failure('invalid-asset', type + ' 的 items 必须是数组', at + '.items')
+    }
+    if (items.length === 0) {
+      return failure('invalid-asset', type + ' 的 items 不能为空', at + '.items')
+    }
+
+    const claimed: AssetSourceRef =
+      sourceVersion === undefined ? { id: sourceId } : { id: sourceId, version: sourceVersion }
+    declared += 1
+
+    if (type === 'persona') {
+      const result = readPersonaItems(items, at + '.items')
+      if (!result.ok) return { ok: false, error: result.error }
+      contents.persona = { source: claimed, items: result.items }
+      continue
+    }
+
+    if (type === 'labels') {
+      const result = readLabelItems(items, at + '.items')
+      if (!result.ok) return { ok: false, error: result.error }
+      contents.labels = { source: claimed, items: result.items }
+      continue
+    }
+
+    if (type === 'strategies') {
+      // 标签引用留待装配阶段由标签集来源解析,与包文档读取的口径一致
+      const result = readStrategyItems(items, at + '.items', null)
+      if (!result.ok) return { ok: false, error: result.error }
+      contents.strategies = { source: claimed, items: result.items }
+      continue
+    }
+
+    const result = readInjectionItems(items, at + '.items')
+    if (!result.ok) return { ok: false, error: result.error }
+    contents.injection = { source: claimed, items: result.items }
+  }
+
+  if (declared === 0) return failure('invalid-asset', '内容里没有任何一类')
+  return { ok: true, contents }
 }
 
 /**
