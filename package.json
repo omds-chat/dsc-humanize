@@ -14,6 +14,9 @@
   },
   "dsc": {
     "engines": "^1.0.0",
+    "conflicts": [
+      "dsc-llm-tune"
+    ],
     "description": {
       "zh-CN": "让 ds-chat 里的助手更接近你期望的样子,助手形态由你在插件内输入与编辑;当前仅内核骨架,编辑界面尚未实现;资产包格式由 dsc-humanize-asset-template 定义",
       "en-US": "Aims to bring the assistant in ds-chat closer to what you expect, with the form you enter and edit in the plugin; kernel skeleton only, the editing UI is not built yet; the asset package format is defined by dsc-humanize-asset-template"

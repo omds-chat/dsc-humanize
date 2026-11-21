@@ -107,6 +107,8 @@ const assertLf = (bytes, name) => {
 
 const NAME_PATTERN = /^(?:dsc-[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*\/dsc-[a-z0-9][a-z0-9._-]*)$/
 const VERSION_PATTERN = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/
+/** 插件 id 规则,与清单的 id 规则一致;conflicts 的元素按它校验 */
+const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9-]{2,63}$/
 
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isText = (value) => typeof value === 'string' && value.length > 0
@@ -136,6 +138,7 @@ const buildMeta = (pkg) => {
   }
 
   if (dsc.home_page !== undefined) meta.home_page = dsc.home_page
+  if (dsc.conflicts !== undefined) meta.conflicts = dsc.conflicts
   if (dsc.attached !== undefined) meta.attached = dsc.attached
 
   return meta
@@ -143,7 +146,7 @@ const buildMeta = (pkg) => {
 
 /* ---------- schema 自校验 ---------- */
 
-const META_FIELDS = ['name', 'version', 'license', 'description', 'author', 'home_page', 'repo_link', 'dependencies', 'attached']
+const META_FIELDS = ['name', 'version', 'license', 'description', 'author', 'home_page', 'repo_link', 'dependencies', 'conflicts', 'attached']
 const META_REQUIRED = ['name', 'version', 'license', 'description', 'author', 'repo_link', 'dependencies']
 
 const validateMeta = (meta) => {
@@ -195,6 +198,20 @@ const validateMeta = (meta) => {
       }
       if (!('dsc' in dependencies)) errors.push('dependencies 必须包含 dsc')
       else if (!isText(dependencies.dsc)) errors.push('dependencies.dsc 必须是非空字符串')
+    }
+  }
+
+  if ('conflicts' in meta) {
+    const conflicts = meta.conflicts
+    if (!Array.isArray(conflicts)) {
+      errors.push('conflicts 必须是数组')
+    } else {
+      for (const id of conflicts) {
+        if (!isText(id) || !PLUGIN_ID_PATTERN.test(id)) {
+          errors.push('conflicts 的元素必须是插件 id: ' + JSON.stringify(id))
+        }
+      }
+      if (new Set(conflicts).size !== conflicts.length) errors.push('conflicts 的元素不得重复')
     }
   }
 

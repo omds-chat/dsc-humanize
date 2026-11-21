@@ -371,6 +371,9 @@ const deriveMetaFromPackage = () => {
   if (dsc.home_page !== undefined) {
     meta.home_page = dsc.home_page
   }
+  if (dsc.conflicts !== undefined) {
+    meta.conflicts = dsc.conflicts
+  }
   if (dsc.attached !== undefined) {
     meta.attached = dsc.attached
   }
