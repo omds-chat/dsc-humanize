@@ -15,13 +15,14 @@ export type DscCapability =
   | 'notify'
   | 'settings:locale'
   | 'settings:surface'
+  | 'ui:page'
   | 'plugins:storage'
   | 'net:fetch'
   | 'assets:read'
   | 'chat:request'
 
-/** 挂载点:会话切换事件与请求前环节 */
-export type DscMount = 'session:changed' | 'chat:before-request'
+/** 挂载点:会话切换事件、请求前环节与插件页面的动作、数据挂载点 */
+export type DscMount = 'session:changed' | 'chat:before-request' | 'ui:page-action' | 'ui:page-data'
 
 /**
  * 插件清单。
@@ -109,11 +110,114 @@ export interface PluginEventsApi {
 }
 
 /**
- * 能力 notify。
- * key 取自宿主 i18n 的既有文案键,插件不自造文案。
+ * 页面动作按钮的描述;actions 区块与 list 区块的逐条动作共用这一形态。
+ * 与宿主 dsc-plugin-engine 的 PageActionDescriptor 对齐。
+ */
+export interface PluginPageActionDescriptor {
+  /** 动作键;回调时作为 actionId 交给插件 */
+  readonly key: string
+  readonly labelKey?: string
+  readonly label?: string
+}
+
+/** 页面 list 区块的单个条目 */
+export interface PluginPageListItemDescriptor {
+  /** 条目键;逐条动作回调时作为 itemKey 交给插件 */
+  readonly key: string
+  readonly titleKey?: string
+  readonly title?: string
+  readonly description?: string
+  readonly badgeKey?: string
+  readonly badge?: string
+}
+
+/** 页面 list 区块;条目数组,可带一个逐条动作 */
+export interface PluginPageListBlock {
+  readonly id: string
+  readonly type: 'list'
+  readonly items: readonly PluginPageListItemDescriptor[]
+  readonly itemAction?: PluginPageActionDescriptor
+}
+
+/** 页面 form 区块;复用设置字段的五种描述,值的生命周期归宿主表单模型 */
+export interface PluginPageFormBlock {
+  readonly id: string
+  readonly type: 'form'
+  readonly fields: readonly PluginSettingFieldDescriptor[]
+}
+
+/** 页面 text 区块;静态说明文字 */
+export interface PluginPageTextBlock {
+  readonly id: string
+  readonly type: 'text'
+  readonly text: string
+}
+
+/** 页面 actions 区块;按钮组 */
+export interface PluginPageActionsBlock {
+  readonly id: string
+  readonly type: 'actions'
+  readonly items: readonly PluginPageActionDescriptor[]
+}
+
+/** 页面区块的四种类型;控件形态由宿主按类型渲染,插件不交控件 */
+export type PluginPageBlock =
+  | PluginPageListBlock
+  | PluginPageFormBlock
+  | PluginPageTextBlock
+  | PluginPageActionsBlock
+
+/** registerPage 返回的句柄;释放函数撤销该页面的登记 */
+export interface PluginPageHandle {
+  readonly id: string
+  dispose(): void
+}
+
+/**
+ * 一份插件页面描述。
+ * 与宿主 dsc-plugin-engine 的 PageDescriptor 对齐:id 与区块 id、条目键、动作键
+ * 共用 settings 字段键的词表(^\a-z\[a-z0-9-]\{0,63}\$),描述序列化后不超过 8KB。
+ */
+export interface PluginPageDescriptor {
+  /** 页面 id;同一插件内不得重复,与插件 id 共同构成页面入口的键 */
+  readonly id: string
+  readonly titleKey?: string
+  readonly title?: string
+  readonly blocks: readonly PluginPageBlock[]
+}
+
+/** 页面动作回调的载荷;form 是宿主收集的页面表单草稿值,页面没有表单区块时不出现 */
+export interface PluginPageActionPayload {
+  readonly pageId: string
+  readonly actionId: string
+  readonly itemKey?: string
+  readonly form?: Record<string, PluginSettingValue>
+}
+
+/** 页面动作回调的返回;refresh 为 true 时宿主重新向插件索取页面模型 */
+export interface PluginPageActionResponse {
+  readonly refresh?: boolean
+}
+
+export type PluginPageActionHandler = (
+  payload: PluginPageActionPayload,
+) => PluginPageActionResponse | undefined
+
+/** 页面数据处理器;同步返回当前页面模型,返回空值表示沿用登记时的缺省模型 */
+export type PluginPageDataHandler = (pageId: string) => PluginPageDescriptor | null | undefined
+
+/**
+ * 能力 notify 与 ui:page。
+ * notify 的 key 取自宿主 i18n 的既有文案键,插件不自造文案;
+ * registerPage 登记一份声明式页面描述,宿主据此渲染页面,描述非法时抛 PluginPageError;
+ * onPageAction 与 onPageData 分别登记页面动作回调与页面数据索取处理器,
+ * 都要求清单声明对应挂载点,登记返回释放函数,停用随引擎清理。
  */
 export interface PluginUiApi {
   notify(key: string, params?: Record<string, string | number>): void
+  registerPage(descriptor: PluginPageDescriptor): PluginPageHandle
+  onPageAction(handler: PluginPageActionHandler): () => void
+  onPageData(handler: PluginPageDataHandler): () => void
 }
 
 /** 设置字段的类型;控件形态由宿主按类型渲染,插件只交描述、不交控件 */

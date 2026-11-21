@@ -31,7 +31,7 @@
     },
     "capabilities": {
       "type": "array",
-      "description": "申请的能力,不得重复;net:fetch 只对内置插件开放,assets:read 与 settings:surface 对全部插件开放",
+      "description": "申请的能力,不得重复;net:fetch 只对内置插件开放,assets:read、settings:surface 与 ui:page 对全部插件开放",
       "items": {
         "$ref": "#/$defs/capability"
       },
@@ -39,7 +39,7 @@
     },
     "mounts": {
       "type": "array",
-      "description": "订阅的挂载点,不得重复;当前有 session:changed 与 chat:before-request",
+      "description": "订阅的挂载点,不得重复;当前有 session:changed、chat:before-request、ui:page-action 与 ui:page-data",
       "items": {
         "$ref": "#/$defs/mount"
       },
@@ -100,6 +100,7 @@
         "notify",
         "settings:locale",
         "settings:surface",
+        "ui:page",
         "plugins:storage",
         "net:fetch",
         "assets:read",
@@ -110,7 +111,9 @@
       "type": "string",
       "enum": [
         "session:changed",
-        "chat:before-request"
+        "chat:before-request",
+        "ui:page-action",
+        "ui:page-data"
       ]
     }
   }

@@ -11,6 +11,8 @@ import type { PluginManifest } from './types.js'
  * assets:read 是资产市场的远端取件通道:只 GET、只 https 与回环 http、不带凭证、
  * 上限 512KB、三态结果,市场按它读来源索引、证书与包内文件,不自行发请求。
  * settings:surface 用于登记来源开关与自建来源字段,宿主渲染设置表单,插件不交控件。
+ * ui:page 用于登记「资产市场」页面,ui:page-action 与 ui:page-data 是配套的
+ * 动作回调与模型索取挂载点(引擎要求申请能力 ui:page 并声明这两个挂载点)。
  */
 export const manifest: PluginManifest = {
   id: 'dsc-humanize',
@@ -18,6 +20,6 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   engines: '^1.0.0',
   conflicts: ['dsc-llm-tune'],
-  capabilities: ['events:session', 'notify', 'plugins:storage', 'chat:request', 'assets:read', 'settings:surface'],
-  mounts: ['session:changed', 'chat:before-request'],
+  capabilities: ['events:session', 'notify', 'plugins:storage', 'chat:request', 'assets:read', 'settings:surface', 'ui:page'],
+  mounts: ['session:changed', 'chat:before-request', 'ui:page-action', 'ui:page-data'],
 }

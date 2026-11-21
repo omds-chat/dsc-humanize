@@ -79,12 +79,12 @@ export interface MarketSource {
   readonly enabled: boolean
 }
 
-/** 设置表面字段的键,与登记给宿主的描述一致 */
+/** 设置表面字段的键,与登记给宿主的描述一致;键须过宿主 SETTING_KEY_PATTERN(不含下划线) */
 export const SETTING_KEYS = {
-  innerSourceEnabled: 'inner_asset_source',
-  awesomeSourceEnabled: 'awesome_asset_source',
-  customSourceUrl: 'custom_asset_source_url',
-  customSourceId: 'custom_asset_source_id',
+  innerSourceEnabled: 'inner-asset-source',
+  awesomeSourceEnabled: 'awesome-asset-source',
+  customSourceUrl: 'custom-asset-source-url',
+  customSourceId: 'custom-asset-source-id',
 } as const
 
 /**

@@ -10,11 +10,27 @@ import type { CatalogResult, CatalogTrust, MarketError } from './market/catalog.
 import { fetchPackageDocument } from './market/install.js'
 import type { InstallFetchError } from './market/install.js'
 import { marketSettingDescriptor, resolveMarketSources } from './market/sources.js'
+import {
+  buildMarketPageModel,
+  CATALOG_CACHE_TTL_MS,
+  INSTALL_ACTION_KEY,
+  MARKET_PAGE_ID,
+  readPageFormValues,
+  REFRESH_ACTION_KEY,
+} from './market/page.js'
+import type { MarketPageEntry, MarketPageSourceResult } from './market/page.js'
 import { createHostAssetTransport, pickHostAssets } from './market/transport.js'
 import { manifest } from './manifest.js'
 import { describeTrustVerdict, verifySourceTrust } from './trust/source-verdict.js'
 import type { AssetTrustVerdict } from './trust/source-verdict.js'
-import type { PluginContext, PluginSettingValue } from './types.js'
+import type {
+  PluginContext,
+  PluginPageActionPayload,
+  PluginPageActionResponse,
+  PluginPageDataHandler,
+  PluginPageDescriptor,
+  PluginSettingValue,
+} from './types.js'
 
 export { manifest }
 export * from './humanize/index.js'
@@ -66,6 +82,62 @@ let marketTransport: AssetTextTransport | null = null
  * 来源开关与自建来源字段的生效值在每次目录取件时重新读取,不做缓存。
  */
 let marketSettingsValues: () => Record<string, PluginSettingValue> | null = () => null
+
+/* ---------- 资产市场页面(ui:page):登记、动作分发与目录短缓存 ---------- */
+
+/**
+ * 目录的内存短缓存:键是合集 id,值是取件结果与取件时刻。
+ * 时长见 page.ts 的 CATALOG_CACHE_TTL_MS(5 分钟,对齐设计 8.1 的内存缓存建议):
+ * 数据处理器每次进入页面先用缓存出模型,缓存过期或缺失才发起取件,
+ * 平衡 assets:read 的 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算;
+ * 「刷新目录」动作绕过缓存重新取件。
+ */
+const pageCatalogCache = new Map<string, { result: CatalogResult; at: number }>()
+
+/** 测试注入点:替换缓存时效判断用的时钟,undefined 恢复默认 */
+let pageClock: () => number = () => Date.now()
+
+/** 页面目录的取件任务;单飞,进行中时数据处理器对缺失来源显示「读取中」占位 */
+let pagePullInFlight: Promise<void> | null = null
+
+/** 数据处理器最近一次模型构建的条目登记表;动作回调按条目键查表还原安装参数 */
+let pageItemEntries: readonly MarketPageEntry[] = []
+
+/**
+ * 页面表单草稿的会话内覆盖值。引擎约定页面表单的值不落盘(只活在宿主侧脏值生命周期),
+ * 所以动作载荷带表单时把草稿值记在这里,本会话内的取件与安装都按它解析来源;
+ * 持久保存仍走插件设置页(settings:surface 的写侧归宿主),停用时清空。
+ */
+let pageFormOverride: Record<string, PluginSettingValue> | null = null
+
+/**
+ * 页面触发的安装入口;null 时用 installMarketPackage。
+ * 测试注入点:替换后观察动作分发到安装层的参数,undefined 恢复默认。
+ */
+export type MarketInstaller = (
+  sourceId: string,
+  author: string,
+  packageId: string,
+  version?: string,
+) => Promise<MarketInstallResult>
+let pageInstaller: MarketInstaller | null = null
+
+/** 测试注入点:替换页面目录缓存时效判断用的时钟 */
+export const setMarketPageClock = (clock?: () => number): void => {
+  pageClock = clock ?? (() => Date.now())
+}
+
+/** 测试注入点:替换页面动作分发的安装入口 */
+export const setMarketInstaller = (installer?: MarketInstaller): void => {
+  pageInstaller = installer ?? null
+}
+
+/** 安装结果提示用的宿主文案键;宿主没有资产市场专用键,复用插件安装的最近似键 */
+const INSTALL_SUCCESS_KEY = 'pluginInstalled'
+const INSTALL_FAILED_KEY = 'pluginInstallRejected'
+
+/** 激活时拿到的 notify 出口;未激活时页面动作不提示 */
+let notifier: ((key: string, params?: Record<string, string | number>) => void) | null = null
 
 /** 市场安装记录与来源配置的存储键;单插件存储上限 64KB,记录裁到最近 50 条 */
 const MARKET_STORAGE_KEY = 'dsc-humanize/market/v1'
@@ -237,7 +309,7 @@ export type MarketCatalogResult = CatalogResult
  * 不发任何请求;通道存在时单次取件的限流与三态口径由宿主落实。
  */
 export const fetchMarketCatalog = async (sourceId?: string): Promise<MarketCatalogResult> => {
-  const { sources } = resolveMarketSources(marketSettingsValues())
+  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
   const source =
     sourceId === undefined
       ? sources.find((item) => item.enabled) ?? null
@@ -388,6 +460,142 @@ export const installMarketPackage = async (
   }
 }
 
+/** 页面动作失败的短原因:宿主提示参数里只带一段可读文本 */
+const shortReason = (error: unknown): string => {
+  const text =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : String(error)
+  return text.length > 120 ? text.slice(0, 120) + '…' : text
+}
+
+/** 缓存是否仍在时效内 */
+const isCacheFresh = (sourceId: string): boolean => {
+  const cached = pageCatalogCache.get(sourceId)
+  return cached !== undefined && pageClock() - cached.at < CATALOG_CACHE_TTL_MS
+}
+
+/**
+ * 按既有 catalog 层刷新页面目录(设计 3.1 目录部分)。
+ * 单飞:进行中时直接复用同一个任务;force 为 true 时绕过缓存逐来源重新取件。
+ * 每个来源的取件结果连同取件时刻写进短缓存;单个来源失败也记录失败结果,
+ * 让模型层折叠成「来源不可用」一行,不阻断其他来源。
+ */
+const refreshPageCatalog = (force = false): Promise<void> => {
+  if (pagePullInFlight !== null) return pagePullInFlight
+  const run = async (): Promise<void> => {
+    try {
+      const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+      for (const source of sources) {
+        if (!source.enabled) {
+          pageCatalogCache.delete(source.id)
+          continue
+        }
+        if (!force && isCacheFresh(source.id)) continue
+        const result = await fetchCatalog({ source, transport: marketTransport })
+        pageCatalogCache.set(source.id, { result, at: pageClock() })
+      }
+    } catch (error) {
+      log('页面目录刷新失败,保持已有缓存: ' + describeError(error))
+    } finally {
+      pagePullInFlight = null
+    }
+  }
+  pagePullInFlight = run()
+  return pagePullInFlight
+}
+
+/**
+ * 数据挂载点的模型构建:每次调用都用当前缓存出模型(设计 8.1 的内存缓存口径),
+ * 缓存缺失的来源给「读取中」占位,缓存过期的来源在后台补取件、本次先显示旧结果;
+ * 需要补取件时发起单飞任务,取件完成后等宿主下一次索取模型或刷新指示。
+ */
+const buildPageModelNow = (): PluginPageDescriptor => {
+  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+  const results: MarketPageSourceResult[] = []
+  let needsPull = false
+  for (const source of sources) {
+    if (!source.enabled) continue
+    const cached = pageCatalogCache.get(source.id)
+    if (cached === undefined) {
+      results.push({ source, pending: true })
+      needsPull = true
+      continue
+    }
+    results.push(
+      cached.result.ok
+        ? { source, catalog: cached.result }
+        : { source, error: cached.result.error },
+    )
+    if (!isCacheFresh(source.id)) needsPull = true
+  }
+  if (needsPull && pagePullInFlight === null) {
+    void refreshPageCatalog()
+  }
+  const model = buildMarketPageModel(results)
+  pageItemEntries = model.entries
+  if (model.truncated) {
+    log('页面目录超过宿主页面描述的体积上限,已从尾部收敛条目: ' + MARKET_PAGE_ID)
+  }
+  return model.descriptor
+}
+
+/** ui:page-data 挂载点:只回答资产市场这一页,其他页面回落到登记时的缺省模型 */
+const pageDataHandler: PluginPageDataHandler = (pageId) => {
+  if (pageId !== MARKET_PAGE_ID) return null
+  return buildPageModelNow()
+}
+
+/** 一次页面安装动作:分发到安装层,完成用 notify 提示成功或失败,不弹任何窗 */
+const dispatchMarketInstall = async (entry: MarketPageEntry): Promise<void> => {
+  const installer = pageInstaller ?? installMarketPackage
+  try {
+    const result = await installer(entry.sourceId, entry.author, entry.packageId)
+    if (result.ok) {
+      notifier?.(INSTALL_SUCCESS_KEY, { id: entry.packageId })
+      log('页面安装 ' + entry.packageId + ' 完成,来源 ' + entry.sourceId)
+    } else {
+      notifier?.(INSTALL_FAILED_KEY, {
+        id: entry.packageId,
+        reason: shortReason(result.error.code + ': ' + result.error.message),
+      })
+      log('页面安装 ' + entry.packageId + ' 失败(' + result.error.code + '): ' + result.error.message)
+    }
+  } catch (error) {
+    notifier?.(INSTALL_FAILED_KEY, { id: entry.packageId, reason: shortReason(error) })
+    log('页面安装 ' + entry.packageId + ' 抛错: ' + describeError(error))
+  }
+}
+
+/**
+ * ui:page-action 挂载点:刷新目录返回刷新指示;安装动作按条目键查表分发,
+ * 查不到(模型已重建、条目过期)只记日志;载荷带表单草稿时先在本会话内生效。
+ */
+const pageActionHandler = (payload: PluginPageActionPayload): PluginPageActionResponse | undefined => {
+  if (payload.pageId !== MARKET_PAGE_ID) return undefined
+  const formValues = readPageFormValues(payload.form)
+  if (formValues !== null) {
+    pageFormOverride = formValues
+    log('页面表单草稿已生效(本会话内覆盖设置值参与来源解析,不落盘)')
+  }
+  if (payload.actionId === REFRESH_ACTION_KEY) {
+    void refreshPageCatalog(true)
+    return { refresh: true }
+  }
+  if (payload.actionId === INSTALL_ACTION_KEY && typeof payload.itemKey === 'string') {
+    const entry = pageItemEntries.find((item) => item.key === payload.itemKey)
+    if (entry === undefined) {
+      log('安装动作的条目键已过期或不可用,已忽略: ' + payload.itemKey)
+      return undefined
+    }
+    void dispatchMarketInstall(entry)
+    return undefined
+  }
+  return undefined
+}
+
 /**
  * 启动入口,引擎在激活时调用,超时 5 秒。
  * 返回值被忽略,不要用它传递释放函数;快照读取在超时与降级约束内完成,失败不阻断激活。
@@ -429,6 +637,30 @@ export const activate = async (context: PluginContext): Promise<void> => {
     }
   } catch (error) {
     log('登记资产市场设置字段失败,来源开关按缺省处理: ' + describeError(error))
+  }
+
+  // 资产市场页面:登记页面描述与动作、数据两个挂载点;宿主没有 ui:page 能力时跳过,不阻断激活
+  notifier = (key, params) => context.ui.notify(key, params)
+  try {
+    if (typeof context.ui.registerPage === 'function') {
+      // 登记时的缺省模型:目录尚无缓存,列表为空;宿主索取模型时由数据挂载点补全
+      context.ui.registerPage(buildMarketPageModel([]).descriptor)
+      log('已登记资产市场页面(ui:page): ' + MARKET_PAGE_ID)
+    } else {
+      log('宿主没有 ui:page 页面能力,资产市场页面不可用')
+    }
+  } catch (error) {
+    log('登记资产市场页面失败,页面不可用但不阻断激活: ' + describeError(error))
+  }
+  try {
+    if (typeof context.ui.onPageAction === 'function') {
+      context.ui.onPageAction(pageActionHandler)
+    }
+    if (typeof context.ui.onPageData === 'function') {
+      context.ui.onPageData(pageDataHandler)
+    }
+  } catch (error) {
+    log('登记页面动作或数据挂载点失败,页面静态显示: ' + describeError(error))
   }
 
   context.log(
@@ -478,7 +710,14 @@ export const deactivate = (): void => {
   snapshotStore = null
   storage = null
   logger = null
+  notifier = null
   marketTransport = null
   marketSettingsValues = () => null
+  pageCatalogCache.clear()
+  pagePullInFlight = null
+  pageItemEntries = []
+  pageFormOverride = null
+  pageInstaller = null
+  pageClock = () => Date.now()
   active = false
 }
