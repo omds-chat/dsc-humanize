@@ -4,11 +4,17 @@ import type { SnapshotStore } from './host/snapshot-db.js'
 import { SNAPSHOT_STORAGE_KEY, createSnapshot, readActiveSnapshot } from './host/snapshot.js'
 import { readAssetPackage } from './humanize/assets/loader.js'
 import { KERNEL_VERSION } from './humanize/index.js'
-import type { AssetContents, AssetLoadError, AssetPackage } from './humanize/types.js'
+import type { AssetContents, AssetLoadError, AssetPackage, AssetTextTransport } from './humanize/types.js'
+import { fetchCatalog } from './market/catalog.js'
+import type { CatalogResult, CatalogTrust, MarketError } from './market/catalog.js'
+import { fetchPackageDocument } from './market/install.js'
+import type { InstallFetchError } from './market/install.js'
+import { marketSettingDescriptor, resolveMarketSources } from './market/sources.js'
+import { createHostAssetTransport, pickHostAssets } from './market/transport.js'
 import { manifest } from './manifest.js'
 import { describeTrustVerdict, verifySourceTrust } from './trust/source-verdict.js'
 import type { AssetTrustVerdict } from './trust/source-verdict.js'
-import type { PluginContext } from './types.js'
+import type { PluginContext, PluginSettingValue } from './types.js'
 
 export { manifest }
 export * from './humanize/index.js'
@@ -47,6 +53,23 @@ let snapshotDbFactory: IDBFactory | null | undefined
 
 /** 激活时拿到的日志出口;未激活时不写日志 */
 let logger: ((message: string) => void) | null = null
+
+/**
+ * 市场远端取件通道:激活时把 context.assets.readText 包装成内核的 transport 注入。
+ * 宿主没有 assets 成员或清单未获 assets:read 时为 null,URL 资产保持 transport-missing
+ * 的现状,本地资产不受影响。
+ */
+let marketTransport: AssetTextTransport | null = null
+
+/**
+ * 市场设置值的只读出口:激活时对准宿主的 settings.values(),停用时断开。
+ * 来源开关与自建来源字段的生效值在每次目录取件时重新读取,不做缓存。
+ */
+let marketSettingsValues: () => Record<string, PluginSettingValue> | null = () => null
+
+/** 市场安装记录与来源配置的存储键;单插件存储上限 64KB,记录裁到最近 50 条 */
+const MARKET_STORAGE_KEY = 'dsc-humanize/market/v1'
+const MARKET_RECORD_LIMIT = 50
 
 const describeError = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -198,6 +221,173 @@ export const importAssetPackage = async (
   }
 }
 
+/* ---------- 资产市场:目录取件与安装入口(设计 asset-market.md) ---------- */
+
+/** 当前生效的远端取件通道;未激活或宿主没有 assets 成员时为 null */
+export const getMarketTransport = (): AssetTextTransport | null => marketTransport
+
+/** 一次目录取件的对外结果,错误码 transport-missing / source-unreachable / source-unknown / source-disabled */
+export type MarketCatalogResult = CatalogResult
+
+/**
+ * 拉一个来源的包目录(设计 3.1 第 1-3 步与第 7 步)。
+ *
+ * sourceId 缺省时取优先级最高且已启用的内置来源;来源开关与自建来源字段
+ * 每次调用都从宿主设置值重新解析。宿主没有 assets:read 通道时返回 transport-missing,
+ * 不发任何请求;通道存在时单次取件的限流与三态口径由宿主落实。
+ */
+export const fetchMarketCatalog = async (sourceId?: string): Promise<MarketCatalogResult> => {
+  const { sources } = resolveMarketSources(marketSettingsValues())
+  const source =
+    sourceId === undefined
+      ? sources.find((item) => item.enabled) ?? null
+      : sources.find((item) => item.id === sourceId) ?? null
+  if (source === null) {
+    return {
+      ok: false,
+      error: {
+        code: sourceId === undefined ? 'source-unreachable' : 'source-unknown',
+        message: sourceId === undefined ? '没有已启用的来源' : '找不到这个来源: ' + sourceId,
+      },
+    }
+  }
+  return fetchCatalog({ source, transport: marketTransport })
+}
+
+/** 一条安装记录(设计 4.4):回答从哪来、是什么、信不信、什么时候装 */
+export interface MarketInstallRecord {
+  /** 来源:合集 id 与本次实际生效的 base_url */
+  readonly collectionId: string
+  readonly baseUrl: string
+  /** 包:作者、包标识、版本、格式版本;与快照来源记录对齐 */
+  readonly author: string
+  readonly packageId: string
+  readonly version: string
+  readonly formatVersion: string
+  /** 类型集合:包声明的四类(或五类)中的哪几类 */
+  readonly types: readonly string[]
+  /** 两轴结论,每次安装重新计算,不采信旧值 */
+  readonly trust: CatalogTrust
+  /** 包层清单修订号,供回退提示 */
+  readonly revision?: number
+  /** 安装时间(ISO 文本) */
+  readonly installedAt: string
+}
+
+/** 安装记录的存储形状;结构不符时整体重置,不做部分保留 */
+interface MarketStorageValue {
+  installs: readonly MarketInstallRecord[]
+}
+
+/** 读取安装记录;键缺失或结构不符时返回空清单 */
+const readInstallRecords = (): MarketInstallRecord[] => {
+  const target = storage
+  if (target === null) return []
+  try {
+    const value = target.get(MARKET_STORAGE_KEY)
+    if (typeof value !== 'object' || value === null) return []
+    const installs = (value as { installs?: unknown }).installs
+    if (!Array.isArray(installs)) return []
+    return installs as MarketInstallRecord[]
+  } catch {
+    return []
+  }
+}
+
+/** 追加一条安装记录;写失败只记日志,不影响装配结果 */
+const appendInstallRecord = (record: MarketInstallRecord): boolean => {
+  const target = storage
+  if (target === null) return false
+  const installs = [...readInstallRecords(), record].slice(-MARKET_RECORD_LIMIT)
+  try {
+    target.set(MARKET_STORAGE_KEY, { installs } satisfies MarketStorageValue)
+    return true
+  } catch (error) {
+    log('安装记录写入失败(安装结果不受影响): ' + describeError(error))
+    return false
+  }
+}
+
+/** 一次市场安装的结果;失败时取件与校验都没落盘,已有内容保持不变 */
+export type MarketInstallResult =
+  | {
+      ok: true
+      asset: AssetPackage
+      /** 装配是否写进了当前使用快照,语义与 importAssetPackage 一致 */
+      persisted: boolean
+      /** 两轴结论:签名结论 + 来源结论,来自本次安装时的链校验 */
+      trust: CatalogTrust
+      record: MarketInstallRecord
+      /** 安装记录是否写进了插件存储 */
+      recordPersisted: boolean
+    }
+  | { ok: false; error: MarketError | InstallFetchError | AssetLoadError }
+
+/**
+ * 从市场安装一个资产包(设计 4.1-4.4)。
+ *
+ * 流程:解析来源 → 目录取件确定本次实际生效的 base_url 与两轴结论(同址约束:
+ * 安装取件沿用同一个地址)→ 按包层清单逐文件取包内文件并比对哈希 → 扁平化成
+ * 加载期包文档交给 importAssetPackage 做整包校验与原子装配 → 写安装记录。
+ * 任何取件或校验失败都整包拒绝,不落盘;装配成功但记录写失败时只记日志,
+ * 因为请求已经能按新内容改写(与 importAssetPackage 对快照写失败的口径一致)。
+ *
+ * 两轴结论的来源:目录取件时用合集 EEC 证书对合集 id 做链校验(verifySourceTrust,
+ * 证书主题 CN 与合集 id 一致);importAssetPackage 内部不带证书,它的导入结论按
+ * 本地口径计,安装记录采用链校验的结论,两者不混用。
+ */
+export const installMarketPackage = async (
+  sourceId: string,
+  author: string,
+  packageId: string,
+  version?: string,
+): Promise<MarketInstallResult> => {
+  const catalog = await fetchMarketCatalog(sourceId)
+  if (!catalog.ok) return { ok: false, error: catalog.error }
+
+  const fetched = await fetchPackageDocument({
+    baseUrl: catalog.baseUrl,
+    author,
+    packageId,
+    transport: marketTransport,
+    ...(version === undefined ? {} : { version }),
+  })
+  if (!fetched.ok) return { ok: false, error: fetched.error }
+
+  const importResult = await importAssetPackage(JSON.stringify(fetched.document))
+  if (!importResult.ok) return { ok: false, error: importResult.error }
+
+  const record: MarketInstallRecord = {
+    collectionId: catalog.sourceId,
+    baseUrl: catalog.baseUrl,
+    author,
+    packageId,
+    version: importResult.asset.source.version ?? '',
+    formatVersion: importResult.asset.formatVersion,
+    types: importResult.asset.types,
+    trust: catalog.trust,
+    installedAt: new Date().toISOString(),
+    ...(fetched.revision === undefined ? {} : { revision: fetched.revision }),
+  }
+  const recordPersisted = appendInstallRecord(record)
+  log(
+    '市场安装 ' + packageId + '@' + record.version + ' 完成,来源 ' + catalog.sourceId +
+      ',来源结论 ' + (catalog.trust.source === 'rejected' && catalog.trust.sourceReason !== undefined
+        ? catalog.trust.source + '(' + catalog.trust.sourceReason + ')'
+        : catalog.trust.source) +
+      ',安装记录' + (recordPersisted ? '已写入' : '未写入'),
+  )
+
+  return {
+    ok: true,
+    asset: importResult.asset,
+    persisted: importResult.persisted,
+    trust: catalog.trust,
+    record,
+    recordPersisted,
+  }
+}
+
 /**
  * 启动入口,引擎在激活时调用,超时 5 秒。
  * 返回值被忽略,不要用它传递释放函数;快照读取在超时与降级约束内完成,失败不阻断激活。
@@ -211,6 +401,36 @@ export const activate = async (context: PluginContext): Promise<void> => {
   active = true
   logger = (message) => context.log(message)
   storage = context.storage
+
+  // 市场通道接线:清单申请了 assets:read 且宿主具备 assets 成员时,把 readText 包装成
+  // 内核 transport 注入;否则保持 null,URL 资产以 transport-missing 失败,本地资产不受影响
+  const assetsApi = pickHostAssets(context)
+  marketTransport = assetsApi === null ? null : createHostAssetTransport(assetsApi)
+  log(
+    marketTransport === null
+      ? '宿主未提供 assets:read 读取通道,远端资产取件不可用,本地资产不受影响'
+      : '已接入宿主 assets:read 读取通道,URL 资产装载与市场取件可用',
+  )
+
+  // 设置表面:登记来源开关与自建来源字段,宿主渲染表单;登记失败只记日志,不阻断激活
+  marketSettingsValues = () => {
+    try {
+      return context.settings.values()
+    } catch {
+      return null
+    }
+  }
+  try {
+    if (typeof context.settings.register === 'function') {
+      context.settings.register(marketSettingDescriptor)
+      log('已登记资产市场设置字段(来源开关与自建来源)')
+    } else {
+      log('宿主没有设置表面能力,来源开关与自建来源字段不可用')
+    }
+  } catch (error) {
+    log('登记资产市场设置字段失败,来源开关按缺省处理: ' + describeError(error))
+  }
+
   context.log(
     manifest.id + ': activated, kernel ' + KERNEL_VERSION + ', capabilities ' + manifest.capabilities.join(', '),
   )
@@ -258,5 +478,7 @@ export const deactivate = (): void => {
   snapshotStore = null
   storage = null
   logger = null
+  marketTransport = null
+  marketSettingsValues = () => null
   active = false
 }

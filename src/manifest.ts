@@ -7,6 +7,10 @@ import type { PluginManifest } from './types.js'
  * 两者同时安装时补丁按登记顺序合并,用户无法预测最终取值,因此按「同时安装即拒绝」处理。
  * 职责上两者互补:本插件提供预设,dsc-llm-tune 提供自由调节,按需切换但不并存。
  * 双向互斥的另一侧由 dsc-llm-tune 的清单声明。
+ *
+ * assets:read 是资产市场的远端取件通道:只 GET、只 https 与回环 http、不带凭证、
+ * 上限 512KB、三态结果,市场按它读来源索引、证书与包内文件,不自行发请求。
+ * settings:surface 用于登记来源开关与自建来源字段,宿主渲染设置表单,插件不交控件。
  */
 export const manifest: PluginManifest = {
   id: 'dsc-humanize',
@@ -14,6 +18,6 @@ export const manifest: PluginManifest = {
   version: '0.1.0',
   engines: '^1.0.0',
   conflicts: ['dsc-llm-tune'],
-  capabilities: ['events:session', 'notify', 'plugins:storage', 'chat:request'],
+  capabilities: ['events:session', 'notify', 'plugins:storage', 'chat:request', 'assets:read', 'settings:surface'],
   mounts: ['session:changed', 'chat:before-request'],
 }

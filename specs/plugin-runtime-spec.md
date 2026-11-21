@@ -77,6 +77,8 @@
 | `settings:locale` | `context.settings.locale` | 60 次 / 10 秒 | 3 秒 | 全部插件 |
 | `plugins:storage` | `context.storage.get`、`set`、`remove` | 100 次 / 10 秒 | 同步调用 | 全部插件 |
 | `net:fetch` | `context.net.getText` | 10 次 / 10 秒 | 内层 10 秒中止请求 | 仅内置插件 |
+| `assets:read` | `context.assets.readText`、`context.assets.readBytes` | 20 次 / 10 秒 | 内层 10 秒中止请求 | 全部插件 |
+| `settings:surface` | `context.settings.register`、`context.settings.values` | 60 次 / 10 秒(仅登记与只读) | 同步调用 | 全部插件 |
 | `chat:request` | `context.chat.onBeforeRequest` | 10 次 / 10 秒(仅登记) | 同步调用,全部处理器共用 10 毫秒 | 全部插件 |
 
 - 限流按插件实例独立计数,每个插件各有一份时间窗;`context.events.on` 每调用一次消耗 `events:session` 的一个名额,`context.chat.onBeforeRequest` 每登记一次消耗 `chat:request` 的一个名额,引擎每次发请求前调用处理器不再占用名额。
@@ -99,6 +101,9 @@
 | `context.chat.onBeforeRequest(handler)` | 释放函数 | 登记请求前处理器,释放函数由引擎执行 |
 | `context.ui.notify(key, params?)` | 无返回 | 宿主提示,key 取自宿主 i18n 既有文案键 |
 | `context.settings.locale(options?)` | `Promise<'zh-CN' \| 'en-US'>` | 当前语言 |
+| `context.settings.register(descriptor)` | 释放函数 | 登记一份设置字段描述,宿主据此渲染设置表单;描述非法时抛 `PluginSettingsError`,释放函数由引擎执行 |
+| `context.settings.values()` | `Record<string, SettingValue>` | 只读自身设置值:用户覆盖值优先,否则默认值;secret 字段不返回 |
+| `context.assets.readText(url, options?)` | `Promise<AssetTextResult>` | 资产文本读取,三态结果原样返回,见 5.6 |
 | `context.storage.get(key)` | `unknown` | 缺失的键返回 `null` |
 | `context.storage.set(key, value)` | 无返回 | 值须可 JSON 序列化 |
 | `context.storage.remove(key)` | 无返回 | 键不存在时不报错 |
@@ -154,6 +159,20 @@
 | `postJson(url, body, options?)` | 仅 https 与 JSON 请求体;请求体与响应体上限各 4KB;5 秒后中止;不跟随重定向;响应体丢弃,只回传最终地址与状态码 |
 
 失败时抛 `PluginFetchError`,`reason` 取 `url`、`protocol`、`timeout`、`aborted`、`status`、`content-type`、`too-large`、`body`、`redirect`、`network` 之一;网络与解析失败由插件自行降级,引擎不弹宿主提示。
+
+### 5.6 资产读取
+
+`assets:read` 对全部插件开放,在清单里申请即可;它不是通用联网通道,只按地址读取资产:
+
+| 项 | 规定 |
+|:---:|:---:|
+| 方法 | 仅 GET;不发送 Cookie 与自定义请求头;不接受地址里内嵌的用户名与密码 |
+| 地址 | 仅 https 任意主机,或 http 的回环地址(localhost、127.0.0.1、[::1]);重定向后的最终地址按同一口径复核 |
+| 体积 | 响应体上限 512KB,超出即中止并拒绝 |
+| 超时 | 10 秒后中止请求;被拒时抛 `PluginAssetError`,`reason` 取 `url`、`protocol`、`credential`、`timeout`、`aborted`、`too-large` 之一 |
+| 结果 | 拿到 HTTP 状态码或没有状态码都不抛错,按三态结果交给插件 |
+
+三态结果:`content` 表示拿到了内容(文本按 UTF-8 解码);`status` 表示拿到了明确的 HTTP 状态码(非 2xx 原样回传);`no-status` 表示只有网络层失败、没有任何状态码。后两态的区别有意保留:拿到状态码说明对方已放行跨域,没有状态码时既可能是地址无效,也可能是对方未放行跨域,引擎不替插件猜测是哪一种。
 
 ## 6. 安全边界
 

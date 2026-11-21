@@ -409,6 +409,16 @@ if (signed) {
   authorKey = await prepareAuthorKey()
 }
 
+/**
+ * 两个内置资产来源的本地联调地址(设计 asset-market.md 2.2)。
+ * 从 .env 读取,经 esbuild define 注入产物常量;未配置时注入空串,
+ * 运行时按空串处理,退回线上地址;注入值非法时同样在运行时退回,不享受例外。
+ */
+const INNER_ASSET_LINK_VAR = 'DSC_HUMANIZE_INNER_ASSET_PAGES_LINK'
+const AWESOME_ASSET_LINK_VAR = 'AWESOME_DSC_HUMANIZE_ASSET_PAGES_LINK'
+const innerAssetPagesUrl = (process.env[INNER_ASSET_LINK_VAR] ?? '').trim()
+const awesomeAssetPagesUrl = (process.env[AWESOME_ASSET_LINK_VAR] ?? '').trim()
+
 // 根证书先读:材料缺失时在产出任何文件之前失败
 const rootCaPem = await readRootCaPem()
 const rootCaBytes = Buffer.from(rootCaPem, 'utf8')
@@ -442,6 +452,9 @@ await build({
   define: {
     // 与主线 rspack 的 __ROOT_CA_PEM__ 同一做法:构建期读文件,写入产物常量
     __ROOT_CA_PEM__: JSON.stringify(rootCaPem),
+    // 资产来源的本地联调地址:空串表示未配置,运行时退回线上地址
+    __INNER_ASSET_PAGES_URL__: JSON.stringify(innerAssetPagesUrl),
+    __AWESOME_ASSET_PAGES_URL__: JSON.stringify(awesomeAssetPagesUrl),
   },
   logLevel: 'warning',
 })
@@ -505,6 +518,10 @@ console.log('作者签名: ' + (signed
   ? '已启用,' + signatures.map((item) => item.sigName).join(' 与 ') + ' 已用推导出的公钥自检通过'
   : '未启用,不产出 ' + AUTHOR_SIG_SUFFIX + ' 与 ' + AUTHOR_PUB_FILE))
 console.log('资产根证书: 已内嵌 ' + ROOT_CA_PATH + ',' + rootCaBytes.length + ' 字节,sha256 ' + rootCaSha256)
+console.log(
+  '资产来源联调地址: ' + INNER_ASSET_LINK_VAR + (innerAssetPagesUrl === '' ? '(未配置,退回线上)' : ' -> ' + innerAssetPagesUrl)
+    + ', ' + AWESOME_ASSET_LINK_VAR + (awesomeAssetPagesUrl === '' ? '(未配置,退回线上)' : ' -> ' + awesomeAssetPagesUrl),
+)
 console.log('换行: LF(文本产物),' + AUTHOR_SIG_SUFFIX + ' 为二进制签名文件')
 console.log('体积: ' + pluginInfo.size + ' 字节 (' + (pluginInfo.size / 1024).toFixed(2) + ' KB),meta ' + metaInfo.size + ' 字节')
 

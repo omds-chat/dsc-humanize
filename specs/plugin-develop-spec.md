@@ -37,6 +37,8 @@
 | `sessions:list`、`sessions:read`、`sessions:rename`、`events:session`、`notify`、`settings:locale` | 全部插件 |
 | `plugins:storage` | 全部插件 |
 | `chat:request` | 全部插件;登记请求前处理器,须同时声明挂载点 `chat:before-request` |
+| `settings:surface` | 全部插件;激活期登记一份设置字段描述,宿主渲染设置表单,插件另有 `values()` 只读自身设置值 |
+| `assets:read` | 全部插件;按地址读取远端资产文本或字节,只 GET、只 https 与回环 http、不带凭证、上限 512KB,结果三态原样返回 |
 | `net:fetch` | 仅内置插件,第三方申请按 `unknown-capability` 拒绝 |
 
 ### 2.2 校验顺序与结果

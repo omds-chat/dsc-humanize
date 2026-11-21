@@ -14,6 +14,7 @@ import type {
   ChatBeforeRequestHandler,
   DscMount,
   PluginContext,
+  PluginSettingDescriptor,
   SessionChangedEvent,
 } from '../../src/types.ts'
 
@@ -55,6 +56,7 @@ interface FakeContext {
   eventPoints: DscMount[]
   logs: string[]
   notices: string[]
+  registrations: PluginSettingDescriptor[]
 }
 
 /** 只实现本插件用到的成员,其余按契约给空实现 */
@@ -63,6 +65,7 @@ const createFakeContext = (): FakeContext => {
   const eventPoints: DscMount[] = []
   const logs: string[] = []
   const notices: string[] = []
+  const registrations: PluginSettingDescriptor[] = []
 
   const context: PluginContext = {
     id: 'dsc-humanize',
@@ -88,6 +91,14 @@ const createFakeContext = (): FakeContext => {
     },
     settings: {
       locale: () => Promise.resolve('zh-CN'),
+      register: (descriptor: PluginSettingDescriptor) => {
+        registrations.push(descriptor)
+        return () => undefined
+      },
+      values: () => ({}),
+    },
+    assets: {
+      readText: () => Promise.resolve({ kind: 'no-status', url: '' }),
     },
     net: {
       getText: () => Promise.resolve({ url: '', contentType: '', text: '' }),
@@ -106,7 +117,7 @@ const createFakeContext = (): FakeContext => {
     },
   }
 
-  return { context, handlers, eventPoints, logs, notices }
+  return { context, handlers, eventPoints, logs, notices, registrations }
 }
 
 /** 每个用例从「未激活、无资产」开始,避免模块级状态互相影响 */

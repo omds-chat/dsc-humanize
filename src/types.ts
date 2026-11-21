@@ -14,8 +14,10 @@ export type DscCapability =
   | 'events:session'
   | 'notify'
   | 'settings:locale'
+  | 'settings:surface'
   | 'plugins:storage'
   | 'net:fetch'
+  | 'assets:read'
   | 'chat:request'
 
 /** 挂载点:会话切换事件与请求前环节 */
@@ -114,9 +116,71 @@ export interface PluginUiApi {
   notify(key: string, params?: Record<string, string | number>): void
 }
 
-/** 能力 settings:locale */
+/** 设置字段的类型;控件形态由宿主按类型渲染,插件只交描述、不交控件 */
+export type PluginSettingFieldType = 'switch' | 'select' | 'number' | 'text' | 'secret'
+
+/** 设置字段的值;只有标量 */
+export type PluginSettingValue = string | number | boolean
+
+/** 单个设置字段的描述;字段形态与宿主 dsc-plugin-engine 的 SettingFieldDescriptor 对齐 */
+export interface PluginSettingFieldDescriptor {
+  /** 字段键;在同一份描述内不得重复,也是设置存储的键 */
+  readonly key: string
+  readonly type: PluginSettingFieldType
+  /** 字段标签;走宿主 i18n 字典,与 label 二选一 */
+  readonly labelKey?: string
+  /** 字段标签;插件直给的文案 */
+  readonly label?: string
+  /** 默认值;secret 字段不得有默认值 */
+  readonly default?: PluginSettingValue
+  /** number 的取值范围 */
+  readonly min?: number
+  readonly max?: number
+  /** number 的步进;只影响宿主控件的交互,不参与校验 */
+  readonly step?: number
+  /** text 的长度上限 */
+  readonly maxLength?: number
+  /** text 的形态约束;必须是能通过 new RegExp 编译的正则来源 */
+  readonly pattern?: string
+}
+
+/** 一份设置表面描述;fields 至少一项,同一插件只保留最后登记的一份 */
+export interface PluginSettingDescriptor {
+  readonly fields: readonly PluginSettingFieldDescriptor[]
+}
+
+/**
+ * 能力 settings:locale 与 settings:surface。
+ * register 在激活期登记一份字段描述,宿主据此渲染设置表单,返回释放函数,
+ * 停用随引擎清理;描述非法时抛 PluginSettingsError。
+ * values 只读自身命名空间:用户覆盖值优先,否则默认值,secret 字段不返回;
+ * 写侧不在插件上下文,改动只由用户在宿主设置页保存。
+ */
 export interface PluginSettingsApi {
   locale(options?: PluginCallOptions): Promise<'zh-CN' | 'en-US'>
+  register(descriptor: PluginSettingDescriptor): () => void
+  values(): Record<string, PluginSettingValue>
+}
+
+/**
+ * 资产读取的三态结果,与宿主 dsc-core 的 AssetTextResult 同形。
+ * content 表示拿到了内容;status 表示拿到了明确的 HTTP 状态码;
+ * no-status 表示只有网络层失败、没有任何状态码。
+ * 后两态的区别有意保留:拿到状态码说明对方已放行跨域,没有状态码时既可能是地址无效,
+ * 也可能是对方未放行跨域,引擎不替插件猜测是哪一种。
+ */
+export type PluginAssetTextResult =
+  | { kind: 'content'; url: string; contentType: string; text: string }
+  | { kind: 'status'; url: string; status: number }
+  | { kind: 'no-status'; url: string }
+
+/**
+ * 能力 assets:read。对全部插件开放,按地址取远端资产包的文本;
+ * 只允许 GET、只允许 https 与回环 http,不带凭证,响应体上限 512KB,超时 10 秒。
+ * 三态结果原样交给插件;引擎侧能确定的拒绝(地址、协议、体积、超时)抛 PluginAssetError。
+ */
+export interface PluginAssetsApi {
+  readText(url: string, options?: PluginCallOptions): Promise<PluginAssetTextResult>
 }
 
 /**
@@ -205,6 +269,7 @@ export interface PluginContext {
   events: PluginEventsApi
   ui: PluginUiApi
   settings: PluginSettingsApi
+  assets: PluginAssetsApi
   net: PluginNetApi
   storage: PluginStorageApi
   chat: PluginChatApi
