@@ -17,7 +17,7 @@
 | [dev/implementation-status.md](dev/implementation-status.md) | 实现现状 | 已接入模块、各自状态与边界、资产市场标签与四处界面槽位的落地行为 | 了解现在有什么、接了什么时 | 贡献者、维护者、Agent |
 | [dev/engineering-handbook.md](dev/engineering-handbook.md) | 工程手册 | 构建产物、meta.json 生成、作者签名、本地安装与联调、清单字段、能力与限流、规范与 Schema 的位置、发布、常见问题 | 构建、签名、改清单、发布、排查安装问题时 | 贡献者、维护者 |
 | [dev/source-tree.md](dev/source-tree.md) | 源码目录结构 | 目录树与逐文件职责 | 找文件、改源码时 | 贡献者、Agent |
-| [specs/README.md](../specs/README.md) | 规范区的索引与差异留痕 | 规范文件清单、权威来源与引用约定、校验命令、与宿主实现的已知差异 | 引用规范、核对两侧口径、运行规范校验时 | 贡献者、维护者、Agent |
+| [specs/README.md](../specs/README.md) | 规范区的索引与差异留痕 | 规范文件清单、权威来源与引用约定、校验命令、与上游模板的已知差异 | 引用规范、核对两侧口径、运行规范校验时 | 贡献者、维护者、Agent |
 | [specs/plugin-runtime-spec.md](../specs/plugin-runtime-spec.md) | 插件运行时规范 | 产物形态、导出契约、生命周期与超时、能力与限流、上下文成员、安全边界、错误降级 | 写运行时行为、申请能力、对接宿主时 | 贡献者、Agent |
 | [specs/plugin-develop-spec.md](../specs/plugin-develop-spec.md) | 插件开发规范 | 清单字段与校验、版本与依赖、运行时元数据、作者签名与公钥位置、分发要求 | 改清单、改构建产物、发布或分发时 | 贡献者、维护者 |
 

@@ -6,8 +6,8 @@
 
 | 文件 | 内容 |
 |:---:|:---:|
-| [plugin-runtime-spec.md](plugin-runtime-spec.md) | 运行时规范:产物形态、导出契约、生命周期与超时、能力与限流、上下文成员、安全边界、错误降级 |
-| [plugin-develop-spec.md](plugin-develop-spec.md) | 开发规范:清单字段与校验、版本与依赖、运行时 meta、作者签名与公钥位置、分发要求 |
+| [plugin-runtime-spec.md](plugin-runtime-spec.md) | 运行时规范:产物形态与体积上限、导出契约、生命周期与超时、能力与限流、上下文成员(可见范围、事件、提示与设置、插件数据、大体积数据与 IndexedDB、联网与外源请求、资产读取与下载、请求前补丁、插件设置表面、UI 槽位、供应端点与按端点执行)、安全边界、错误降级 |
+| [plugin-develop-spec.md](plugin-develop-spec.md) | 开发规范:清单字段与校验、UI 槽位白名单、资产声明块、版本与依赖、运行时 meta、作者签名与公钥位置、分发要求 |
 | [spec-version.json](spec-version.json) | 规范版本与 Schema 路径,供其他仓库引用时锁定 |
 | [../schemas/manifest/plugin-manifest.schema.json](../schemas/manifest/plugin-manifest.schema.json) | 清单 Schema |
 | [../schemas/runtime/meta.json](../schemas/runtime/meta.json) | 运行时 meta Schema |
@@ -32,15 +32,12 @@ node scripts/validate-specs.mjs <meta.json> --schema meta # 校验单个运行�
 
 ## 已知差异
 
-以下差异来自上游文档与实现的对照,本规范按实现取舍并在此留痕,不修改上游文档:
+本仓的规范正文与 Schema 已和 dsc-plugin-template 的 spec_version 1.1.0 逐字一致,规范与模板之间没有正文差异,旧版按「上游文档 vs 实现」留痕的条目已随上游文档与规范正文更新全部收敛,不再保留。下表只记录本仓相对上游模板真实存在的本地差异,每行给出上游文件与行号,不修改上游文档:
 
-| 主题 | 上游文档口径 | 实现口径 | 本规范取舍 |
+| 主题 | 上游(dsc-plugin-template)口径 | 本仓口径 | 上游位置 |
 |:---:|:---:|:---:|:---:|
-| `meta.json.author.sig` | 插件开发规范与产物规范把它列为作者签名产物,并称安装与启动时校验 | 引擎只验 `plugin.js.author.sig`;`meta.json` 的完整性由合集三层哈希清单覆盖,本仓库构建不产出该文件 | 只收 `plugin.js.author.sig` |
-| 1 MB 上限的适用范围 | 产物规范写在「本地离线包」一节 | 在线安装与离线包共用同一上限,在线超限同样按 `package-too-large` 拒绝 | 按实现写成在线与离线同一上限 |
-| `context.id` 与 `context.version` | 上游三份文档(产物规范、开发规范、引擎说明)的上下文成员表都没有列出 | 引擎注入的上下文包含这两个只读成员 | 列为上下文成员 |
-| 清单 id 的收敛长度 | 收敛实现只要求小写字母开头、只含小写字母数字与连字符,不限长度 | 清单校验要求 3 到 64 字符,1 到 2 字符的收敛结果会在安装时被拒 | 要求两处同时满足 |
-| 版本范围的写法 | 运行时 meta 的 `dependencies.dsc` 描述为 semver range,允许组合范围 | 清单 `engines` 只接受单段比较表达式;离线包由 `meta.json` 推导清单时,`dependencies.dsc` 会直接当作 `engines`,组合范围会按 `incompatible-version` 拒绝 | 两个字段分别说明,并提示 `dependencies.dsc` 也要写成单段表达式 |
+| 样例收录范围 | `schemas/examples/` 另有 `meta.full.valid.json` 正例;`schemas/examples/invalid/` 另有 `manifest.unknown-mount.json`、`meta.bad-conflicts.json`、`meta.duplicate-mount.json`、`meta.unknown-capability.json`、`meta.unknown-mount.json` 五个反例 | 本仓按需收录,样例集是上游的子集;已收录的每个样例文件与上游逐字一致 | dsc-plugin-template 的 `schemas/examples/` 与 `schemas/examples/invalid/` |
+| 校验脚本的 meta 推导 | `scripts/validate-specs.mjs` 从 `package.json` 的 `dsc` 块派生 meta 时,把 `capabilities`、`mounts`、`conflicts` 三项原样搬运,没写就不产出 | 本仓同名脚本只搬运 `conflicts`,不搬 `capabilities` 与 `mounts`;本仓 `package.json` 的 `dsc` 块未声明这两项,自检结果不受影响 | dsc-plugin-template 的 `scripts/validate-specs.mjs:377-382` |
 
 ## 语言
 
