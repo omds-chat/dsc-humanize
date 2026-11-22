@@ -1,8 +1,8 @@
 /**
- * 资产市场页面的模型构建层(ui:page 消费层,设计 asset-market.md 8.1 的落地形态)。
+ * 资产市场 slot 描述的模型构建层(ui:slot 消费层,设计 asset-market.md 8.1 的落地形态)。
  *
- * 宿主约定(引擎 README「插件页面」):插件只交描述、不交控件,页面模型是声明式的
- * PageDescriptor;数据挂载点同步返回模型,所以这里只做「取件结果 -> 模型」的纯转换,
+ * 宿主约定:插件只交描述、不交控件,slot 模型是声明式的 SlotDescriptor;
+ * 数据挂载点同步返回模型,所以这里只做「取件结果 -> 模型」的纯转换,
  * 异步取件与缓存由 src/index.ts 的接线层负责。
  *
  * 模型构成(任务口径):
@@ -24,16 +24,24 @@ import { marketSettingDescriptor } from './sources.js'
 import type { CatalogResult } from './catalog.js'
 import type { MarketSource } from './sources.js'
 import type {
-  PluginPageDescriptor,
-  PluginPageListItemDescriptor,
+  PluginSlotDescriptor,
+  PluginSlotListItemDescriptor,
   PluginSettingValue,
 } from '../types.js'
 
-/** 页面 id;同一插件内不得重复,与插件 id 共同构成页面入口的键 */
-export const MARKET_PAGE_ID = 'asset-market'
+/** 资产市场登记的挂载点:会话视图标签栏里的一个标签 + 主区整页 */
+export const MARKET_SLOT = 'conversation.tabs'
 
-/** 页面标题;宿主插件面板的页面入口用它 */
-export const MARKET_PAGE_TITLE = '资产市场'
+/** 条目 id;同一 slot 内不得重复 */
+export const MARKET_SLOT_ID = 'asset-market'
+
+/** 条目标题的 zh/en 词条,成对登记;宿主按界面语言取一侧 */
+export const MARKET_SLOT_LABELS = {
+  'zh-CN': '资产市场',
+  'en-US': 'Asset market',
+} as const
+
+export type MarketSlotLocale = keyof typeof MARKET_SLOT_LABELS
 
 /** 逐条动作键:安装 */
 export const INSTALL_ACTION_KEY = 'install'
@@ -43,7 +51,7 @@ export const REFRESH_ACTION_KEY = 'refresh'
 
 /**
  * 目录的内存短缓存时长。口径对齐设计 8.1 的建议(目录缓存只在内存、5 分钟):
- * 进入页面先显示缓存,「刷新目录」动作绕过缓存重新取件,避免把 assets:read 的
+ * 进入条目先显示缓存,「刷新目录」动作绕过缓存重新取件,避免把 assets:read 的
  * 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算耗在重复取件上。
  */
 export const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000
@@ -51,14 +59,14 @@ export const CATALOG_CACHE_TTL_MS = 5 * 60 * 1000
 /** 来源不可用时的徽标文案(任务口径) */
 export const SOURCE_UNAVAILABLE_BADGE = '来源不可用'
 
-/** 目录尚未取到时的徽标文案(第一次进入页面、后台正在取件) */
+/** 目录尚未取到时的徽标文案(第一次进入条目、后台正在取件) */
 export const SOURCE_PENDING_BADGE = '读取中'
 
 /** 截断说明条目的键、标题与说明 */
 const TRUNCATED_ITEM_KEY = 'pkg-truncated'
 const TRUNCATED_ITEM_TITLE = '目录已截断'
 const TRUNCATED_ITEM_DESCRIPTION =
-  '条目超过宿主页面描述的体积上限,已隐藏尾部条目;可用刷新目录重新取件或缩小已启用的来源范围。'
+  '条目超过宿主描述的体积上限,已隐藏尾部条目;可用刷新目录重新取件或缩小已启用的来源范围。'
 
 /** 宿主侧的文案上限(引擎 pluginPages.ts):标题与徽标 40,说明 200,条目至多 200 */
 const MAX_LABEL_LENGTH = 40
@@ -85,9 +93,9 @@ export type MarketPageSourceResult =
   /** 尚未取到(缓存为空、后台正在取件) */
   | { readonly source: MarketSource; readonly pending: true }
 
-/** 一次模型构建的结果:页面描述、条目登记表与是否发生截断 */
+/** 一次模型构建的结果:slot 描述、条目登记表与是否发生截断 */
 export interface MarketPageModel {
-  readonly descriptor: PluginPageDescriptor
+  readonly descriptor: PluginSlotDescriptor
   /** 可安装条目的登记表,动作回调按条目键查表还原安装参数 */
   readonly entries: readonly MarketPageEntry[]
   /** 目录因体积上限被收敛时为 true */
@@ -113,26 +121,26 @@ const failureDescription = (message: string): string =>
   clampDescription('该来源暂不可读,已按「只提示不阻断」处理,不影响其他来源: ' + message)
 
 const pendingDescription =
-  '目录尚未取到,已在后台按既有目录层取件;取件完成后点击刷新目录或重新进入页面查看。'
+  '目录尚未取到,已在后台按既有目录层取件;取件完成后点击刷新目录或重新进入标签查看。'
 
 /** 两轴结论说明(text 区块):来源是否可信与签名是否通过各管一条轴 */
 const TWO_AXIS_NOTE =
   '目录条目的结论分两条轴:来源是否可信由来源证书链与合集 id 的链校验给出,签名是否通过由清单验签给出,两条轴互不替代;当前合集尚未发布签名材料,签名结论恒为未校验。'
 
-/** 来源表单的保存口径说明:页面表单草稿不落盘,持久保存走插件设置页 */
+/** 来源表单的保存口径说明:表单草稿不落盘,持久保存走插件设置页 */
 const SOURCE_FORM_NOTE =
-  '来源表单与插件设置页的字段同源:页面内改动对本次会话的取件与安装即时生效但不落盘,持久保存请到插件设置页。目录在内存缓存 5 分钟,刷新目录会绕过缓存重新取件。'
+  '来源表单与插件设置页的字段同源:标签内改动对本次会话的取件与安装即时生效但不落盘,持久保存请到插件设置页。目录在内存缓存 5 分钟,刷新目录会绕过缓存重新取件。'
 
-const descriptorBytes = (descriptor: PluginPageDescriptor): number =>
+const descriptorBytes = (descriptor: PluginSlotDescriptor): number =>
   new TextEncoder().encode(JSON.stringify(descriptor)).byteLength
 
-/** 判断一个值是不是页面表单草稿里的合法设置值 */
+/** 判断一个值是不是表单草稿里的合法设置值 */
 const isSettingValue = (value: unknown): value is PluginSettingValue =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 
 /**
  * 收敛动作载荷里的表单草稿值:只保留设置字段的键与标量值,其余丢弃。
- * 页面表单的字段与设置表面同源,键集合一致,这里不需要知道具体键名。
+ * 表单区块的字段与设置表面同源,键集合一致,这里不需要知道具体键名。
  */
 export const readPageFormValues = (
   form: Record<string, unknown> | undefined,
@@ -148,7 +156,7 @@ export const readPageFormValues = (
 }
 
 /**
- * 由各来源的取件结果构建「资产市场」页面模型。
+ * 由各来源的取件结果构建「资产市场」slot 描述。
  *
  * 纯函数:不取件、不读设置,输入即各来源的结果(取件失败的来源给 error,
  * 尚未取到的来源给 pending)。条目登记表按构建顺序生成安全键,动作回调层
@@ -156,8 +164,9 @@ export const readPageFormValues = (
  */
 export const buildMarketPageModel = (
   results: readonly MarketPageSourceResult[],
+  locale: MarketSlotLocale = 'zh-CN',
 ): MarketPageModel => {
-  const items: PluginPageListItemDescriptor[] = []
+  const items: PluginSlotListItemDescriptor[] = []
   const entries: MarketPageEntry[] = []
   let nextPackageIndex = 0
   let nextNoticeIndex = 0
@@ -208,9 +217,10 @@ export const buildMarketPageModel = (
     entries.push(...keptEntries)
   }
 
-  const makeDescriptor = (): PluginPageDescriptor => ({
-    id: MARKET_PAGE_ID,
-    title: MARKET_PAGE_TITLE,
+  const makeDescriptor = (): PluginSlotDescriptor => ({
+    id: MARKET_SLOT_ID,
+    title: MARKET_SLOT_LABELS[locale],
+    order: 50,
     blocks: [
       { id: 'overview', type: 'text', text: TWO_AXIS_NOTE + SOURCE_FORM_NOTE },
       {

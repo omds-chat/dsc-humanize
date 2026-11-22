@@ -31,7 +31,7 @@
     },
     "capabilities": {
       "type": "array",
-      "description": "申请的能力,不得重复;net:fetch 只对内置插件开放,assets:read、settings:surface 与 ui:page 对全部插件开放",
+      "description": "申请的能力,不得重复;net:fetch 只对内置插件开放,assets:read、settings:surface 与 ui:slot 对全部插件开放",
       "items": {
         "$ref": "#/$defs/capability"
       },
@@ -39,9 +39,17 @@
     },
     "mounts": {
       "type": "array",
-      "description": "订阅的挂载点,不得重复;当前有 session:changed、chat:before-request、ui:page-action 与 ui:page-data",
+      "description": "订阅的挂载点,不得重复;当前有 session:changed、chat:before-request、ui:slot-action 与 ui:slot-data",
       "items": {
         "$ref": "#/$defs/mount"
+      },
+      "uniqueItems": true
+    },
+    "slots": {
+      "type": "array",
+      "description": "ui:slot 的登记白名单,不得重复;申请能力 ui:slot 时,登记的挂载点必须在这里声明,取值来自 slot 枚举",
+      "items": {
+        "$ref": "#/$defs/slot"
       },
       "uniqueItems": true
     }
@@ -100,7 +108,7 @@
         "notify",
         "settings:locale",
         "settings:surface",
-        "ui:page",
+        "ui:slot",
         "plugins:storage",
         "net:fetch",
         "assets:read",
@@ -112,8 +120,15 @@
       "enum": [
         "session:changed",
         "chat:before-request",
-        "ui:page-action",
-        "ui:page-data"
+        "ui:slot-action",
+        "ui:slot-data"
+      ]
+    },
+    "slot": {
+      "type": "string",
+      "enum": [
+        "nav.panel",
+        "conversation.tabs"
       ]
     }
   }

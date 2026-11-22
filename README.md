@@ -21,9 +21,9 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 一条本地资产交付路径:激活时从 IndexedDB 读取当前使用快照并装配,并把插件存储里的过渡快照一次性迁入,另有 `importAssetPackage` 从 JSON 文本导入资产包文档;快照的库内约定按设计文档 4.6 的初版实现,标注为可调整
 - 一条根证书内嵌与链校验链路:构建时读取 `certs/dsc-humanize/dsc-humanize-root-ca.crt`,把 PEM 注入为产物常量,运行时导出 `EMBEDDED_ROOT_CA_PEM`;`importAssetPackage` 带来源证书时先用它做「根 → EEC」两级链校验,按两轴结论(签名结论 + 来源结论)降级来源结论、不阻断导入
 - 一条资产市场逻辑层(按 [docs/design/asset-market.md](docs/design/asset-market.md)):清单申请 `assets:read` 与 `settings:surface`;激活时把 `context.assets.readText` 包装成内核 transport 注入(三态透传:content 取件成功、status 按 3.x 口径降级、no-status 与通道拒绝按 transport-failed,未获能力或宿主无 assets 成员时保持 transport-missing,本地资产不受影响);内置两条来源(组织预设与社区合集,base_url 列表见设计 2.2,本地联调地址由构建注入、非法时退回线上),来源开关与一条自建来源经设置表面字段存储;目录取件按设计 3.1 的目录部分实现(来源元数据 → 合集证书三档 → 内嵌根校链 → assets.json),两种合集元数据形状兼容读取(设计 8.2),结论按 3.4 两轴记录,链校验复用 `verifySourceTrust`;安装入口 `installMarketPackage` 按包层清单逐文件取件并比对 SHA-512,整包校验复用 `importAssetPackage` 的既有原子语义,安装记录含来源标识、base_url 与版本
-- 一块资产市场页面(已按 ui:page 落地,入口:插件面板 → 插件页面 → 资产市场;宿主插槽细节以引擎文档为准):清单申请 `ui:page` 能力并声明 `ui:page-action` 与 `ui:page-data` 挂载点;激活时用 `context.ui.registerPage` 登记「资产市场」页面,数据挂载点每次索取模型都按既有 catalog 层补取件并做内存短缓存(5 分钟,「刷新目录」绕过),动作挂载点把「安装」分发到 `installMarketPackage`、把「刷新目录」转成刷新指示;来源不可用时该来源折叠成一行说明,只提示不阻断;详见下文「资产市场」节
-- 一份本地回环冒烟脚本:`node --import ./scripts/test/ts-hooks.mjs scripts/smoke-market.mjs` 在 127.0.0.1:61120 与 61121 起两个静态目录(inner 用 indexed 形状与证书第一档,awesome 用 flat 形状与证书第二档),走完整的目录取件、页面模型生成、动作分发与安装链路;只访问回环地址
-- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分(含排除词、锚定模式与语言判定)、维度合成(同维覆盖、跨维拼接、缺省归 tone、语言维 lang 门)、对比示例读取与注入、资产按类型读取与校验、1.1.0 特性版本门、IndexedDB 快照封装、快照装配与一次性迁移、资产包导入、证书链校验与导入两轴结论、内核装配与请求前接线、市场页面模型与动作分发
+- 一块资产市场标签(已按 ui:slot 落地,入口:会话视图标签栏里的资产市场标签;宿主插槽细节以引擎文档为准):清单申请 `ui:slot` 能力,在 `slots` 白名单里声明 `conversation.tabs`,并声明 `ui:slot-action` 与 `ui:slot-data` 挂载点;激活时用 `context.ui.registerSlot` 把「资产市场」条目登记到 `conversation.tabs`(order 50,标题按宿主语言取 zh/en 成对词条的一侧),数据挂载点每次索取模型都按既有 catalog 层补取件并做内存短缓存(5 分钟,「刷新目录」绕过),动作挂载点把「安装」分发到 `installMarketPackage`、把「刷新目录」转成刷新指示;来源不可用时该来源折叠成一行说明,只提示不阻断;详见下文「资产市场」节
+- 一份本地回环冒烟脚本:`node --import ./scripts/test/ts-hooks.mjs scripts/smoke-market.mjs` 在 127.0.0.1:61120 与 61121 起两个静态目录(inner 用 indexed 形状与证书第一档,awesome 用 flat 形状与证书第二档),走完整的目录取件、slot 描述生成、动作分发与安装链路;只访问回环地址
+- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分(含排除词、锚定模式与语言判定)、维度合成(同维覆盖、跨维拼接、缺省归 tone、语言维 lang 门)、对比示例读取与注入、资产按类型读取与校验、1.1.0 特性版本门、IndexedDB 快照封装、快照装配与一次性迁移、资产包导入、证书链校验与导入两轴结论、内核装配与请求前接线、市场 slot 描述与动作分发
 
 内核通过宿主的请求前能力落到请求上:有资产时按策略改写请求参数与系统提示词,没有资产时请求保持原样。插件同时记录会话切换,并在首次激活时用宿主文案键提示一次。
 
@@ -57,7 +57,7 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 
 ## 资产市场
 
-入口路径:插件面板 → 插件页面 → 资产市场。页面已按 ui:page 落地:插件只交描述、不交控件,渲染、i18n 与样式全部归宿主,宿主插槽细节以引擎文档(dsc-plugin-engine 的 README「插件页面」节)为准。
+入口路径:会话视图标签栏里的资产市场标签。标签已按 ui:slot 落地:插件只交描述、不交控件,渲染、i18n 与样式全部归宿主,宿主插槽细节以引擎文档为准。
 
 | 区块 | 内容 | 行为 |
 |:---:|:---:|:---:|
@@ -66,8 +66,8 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 | form「来源」 | 内置两来源开关 + 自建来源 URL 与合集 id,字段与插件设置页同源(复用同一份字段描述) | 草稿值随动作载荷交给插件,在本会话内的取件与安装即时生效但不落盘;两个表面不各自漂移 |
 | actions | 「刷新目录」 | 返回刷新指示,宿主重新索取模型;本次取件绕过缓存 |
 
-- 取件与刷新:数据挂载点每次索取模型都走既有 catalog 层补取件(来源元数据 → 合集证书 → assets.json),目录结果做内存短缓存,时长 5 分钟(对齐设计 8.1 的内存缓存建议);缓存时效内的重复索取不重复取件,以平衡 assets:read 的 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算。宿主索取模型是同步回调,首次进入页面先显示「读取中」占位,取件完成后在下一次进入页面或刷新指示时看到目录。
-- 失败降级:某个来源取件失败(所有地址不可达、通道缺失、索引不可读)时,该来源在目录里折叠成一行说明,徽标标「来源不可用」,其余来源照常列出——遵守「只提示不阻断」;目录条目超过宿主页面描述的体积上限(8KB)时从尾部收敛条目并补一条截断说明。
+- 取件与刷新:数据挂载点每次索取模型都走既有 catalog 层补取件(来源元数据 → 合集证书 → assets.json),目录结果做内存短缓存,时长 5 分钟(对齐设计 8.1 的内存缓存建议);缓存时效内的重复索取不重复取件,以平衡 assets:read 的 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算。宿主索取模型是同步回调,首次进入标签先显示「读取中」占位,取件完成后在下一次索取模型或刷新指示时看到目录。
+- 失败降级:某个来源取件失败(所有地址不可达、通道缺失、索引不可读)时,该来源在目录里折叠成一行说明,徽标标「来源不可用」,其余来源照常列出——遵守「只提示不阻断」;目录条目超过宿主描述的体积上限(8KB)时从尾部收敛条目并补一条截断说明。
 - 安装:动作按条目登记表把 itemKey 还原成来源、作者与包标识,再交给 `installMarketPackage`(与设置页面的来源解析同一条路径,两轴结论每次安装重新计算);成功与失败都用宿主为资产包新增的成对文案键出气泡通知——成功走 `pluginAssetInstalled`(资产包 {id} 安装完成),失败走 `pluginAssetInstallFailed`(资产包 {id} 安装失败:{reason}),不弹窗、不遮罩;旧键 `pluginInstalled` / `pluginInstallRejected` 属于插件安装,不再复用。宿主版本要求:宿主需已提供这对资产专用键(`notify` 只写不读,插件探测不到宿主字典,故不做缺键回落);更早的宿主上气泡取不到文案,安装本身照常完成。
 
 ## 规范与 Schema
@@ -122,7 +122,7 @@ dsc-humanize/
 │   │   ├── kernel.test.ts
 │   │   ├── market-catalog.test.ts # 市场目录取件:两种形状、证书三档、两轴结论
 │   │   ├── market-install.test.ts # 市场安装:清单逐文件、哈希、原子性与记录
-│   │   ├── market-page.test.ts # 市场页面:模型生成、动作分发、失败降级与短缓存
+│   │   ├── market-page.test.ts # 市场 slot:描述生成、动作分发、失败降级与短缓存
 │   │   ├── market-sources.test.ts # 市场来源:地址判定、注入回退、设置开关
 │   │   ├── market-transport.test.ts # assets:read 三态映射与通道注入
 │   │   ├── rule-classifier.test.ts
@@ -149,12 +149,12 @@ dsc-humanize/
 │   │   ├── root-ca.ts        # 内嵌的资产根证书 PEM 常量
 │   │   ├── x509.ts           # 零依赖 X.509 解析与 WebCrypto 链校验
 │   │   └── source-verdict.ts # 导入路径的两轴结论:签名结论 + 来源结论
-│   ├── market/               # 资产市场逻辑层与页面模型
+│   ├── market/               # 资产市场逻辑层与 slot 描述构建
 │   │   ├── transport.ts      # 宿主 assets:read 三态 -> 内核 transport 的映射
 │   │   ├── sources.ts        # 来源模型:内置两来源、地址判定、设置表面字段
 │   │   ├── catalog.ts        # 目录取件:来源元数据、证书三档、链校验、assets.json
 │   │   ├── install.ts        # 安装取件:包层清单逐文件、SHA-512 比对、扁平化
-│   │   └── page.ts           # ui:page 页面模型:目录条目、来源表单、动作键与截断收敛
+│   │   └── page.ts           # ui:slot 描述模型:目录条目、来源表单、动作键与截断收敛
 │   └── humanize/             # 内核骨架,不接宿主
 │       ├── index.ts          # 内核对外出口
 │       ├── kernel.ts         # 内核装配:分类 -> 策略 -> 注入
@@ -180,7 +180,7 @@ dsc-humanize/
 | `src/index.ts` | 激活与停用入口,快照装配与资产包导入 |
 | `src/manifest.ts` | 插件运行时清单,产物继续导出 |
 | `src/host/` | 宿主请求接线与资产交付:申请 `chat:request` 把内核结果映射成宿主补丁;读取当前使用快照 |
-| `src/market/` | 资产市场逻辑层与页面模型:assets:read 三态映射、来源模型、目录取件、安装取件与 ui:page 页面描述构建 |
+| `src/market/` | 资产市场逻辑层与 slot 描述构建:assets:read 三态映射、来源模型、目录取件、安装取件与 ui:slot 描述构建 |
 | `src/trust/` | 内嵌的资产根证书常量与来源证书链校验:零依赖 DER 解析、WebCrypto 验签与导入两轴结论 |
 | `src/humanize/` | 内核骨架:意图分类、策略引擎、注入构建与资产加载,不读写宿主 |
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
@@ -437,11 +437,11 @@ cp .env.example .env
 | `assets:read` | `context.assets.readText` | 20 次 / 10 秒 |
 | `plugins:storage` | `context.storage` | 100 次 / 10 秒,单插件 64KB |
 | `chat:request` | `context.chat.onBeforeRequest` | 10 次 / 10 秒(仅登记) |
-| `ui:page` | `context.ui.registerPage`、`context.ui.onPageAction`、`context.ui.onPageData` | 20 次 / 10 秒(按登记次数计) |
+| `ui:slot` | `context.ui.registerSlot`、`context.ui.onSlotAction`、`context.ui.onSlotData` | 20 次 / 10 秒(按登记次数计) |
 
 `net:fetch` 仅内置插件可申请,第三方插件在清单里写它会被拒绝。`assets:read` 对全部插件开放:只 GET、只 https 与回环 http、不带凭证、上限 512KB、超时 10 秒,结果三态(内容 / 状态码 / 无状态码)原样返回;本插件的资产市场只经这条通道取件,不自行发请求。
 
-本插件当前申请 `events:session`、`notify`、`plugins:storage`、`chat:request`、`assets:read`、`settings:surface` 与 `ui:page` 七项能力,声明 `session:changed`、`chat:before-request`、`ui:page-action` 与 `ui:page-data` 四个挂载点;`plugins:storage` 用于一次性迁移插件存储里的过渡快照,`assets:read` 是资产市场的远端取件通道,`settings:surface` 登记来源开关与自建来源字段,`ui:page` 与两个页面挂载点承载「资产市场」页面(见上文「资产市场」节)。
+本插件当前申请 `events:session`、`notify`、`plugins:storage`、`chat:request`、`assets:read`、`settings:surface` 与 `ui:slot` 七项能力,声明 `session:changed`、`chat:before-request`、`ui:slot-action` 与 `ui:slot-data` 四个挂载点,并在 `slots` 白名单里声明 `conversation.tabs`;`plugins:storage` 用于一次性迁移插件存储里的过渡快照,`assets:read` 是资产市场的远端取件通道,`settings:surface` 登记来源开关与自建来源字段,`ui:slot` 与两个 slot 挂载点把「资产市场」登记为会话视图标签栏里的一个标签(见上文「资产市场」节)。
 
 ## 发布
 

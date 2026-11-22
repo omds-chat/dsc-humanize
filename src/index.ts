@@ -14,21 +14,22 @@ import {
   buildMarketPageModel,
   CATALOG_CACHE_TTL_MS,
   INSTALL_ACTION_KEY,
-  MARKET_PAGE_ID,
+  MARKET_SLOT,
+  MARKET_SLOT_ID,
   readPageFormValues,
   REFRESH_ACTION_KEY,
 } from './market/page.js'
-import type { MarketPageEntry, MarketPageSourceResult } from './market/page.js'
+import type { MarketSlotLocale, MarketPageEntry, MarketPageSourceResult } from './market/page.js'
 import { createHostAssetTransport, pickHostAssets } from './market/transport.js'
 import { manifest } from './manifest.js'
 import { describeTrustVerdict, verifySourceTrust } from './trust/source-verdict.js'
 import type { AssetTrustVerdict } from './trust/source-verdict.js'
 import type {
   PluginContext,
-  PluginPageActionPayload,
-  PluginPageActionResponse,
-  PluginPageDataHandler,
-  PluginPageDescriptor,
+  PluginSlotActionPayload,
+  PluginSlotActionResponse,
+  PluginSlotDataHandler,
+  PluginSlotDescriptor,
   PluginSettingValue,
 } from './types.js'
 
@@ -83,12 +84,12 @@ let marketTransport: AssetTextTransport | null = null
  */
 let marketSettingsValues: () => Record<string, PluginSettingValue> | null = () => null
 
-/* ---------- 资产市场页面(ui:page):登记、动作分发与目录短缓存 ---------- */
+/* ---------- 资产市场 slot(ui:slot):登记、动作分发与目录短缓存 ---------- */
 
 /**
  * 目录的内存短缓存:键是合集 id,值是取件结果与取件时刻。
  * 时长见 page.ts 的 CATALOG_CACHE_TTL_MS(5 分钟,对齐设计 8.1 的内存缓存建议):
- * 数据处理器每次进入页面先用缓存出模型,缓存过期或缺失才发起取件,
+ * 数据处理器每次索取模型先用缓存出模型,缓存过期或缺失才发起取件,
  * 平衡 assets:read 的 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算;
  * 「刷新目录」动作绕过缓存重新取件。
  */
@@ -97,21 +98,21 @@ const pageCatalogCache = new Map<string, { result: CatalogResult; at: number }>(
 /** 测试注入点:替换缓存时效判断用的时钟,undefined 恢复默认 */
 let pageClock: () => number = () => Date.now()
 
-/** 页面目录的取件任务;单飞,进行中时数据处理器对缺失来源显示「读取中」占位 */
+/** slot 目录的取件任务;单飞,进行中时数据处理器对缺失来源显示「读取中」占位 */
 let pagePullInFlight: Promise<void> | null = null
 
 /** 数据处理器最近一次模型构建的条目登记表;动作回调按条目键查表还原安装参数 */
 let pageItemEntries: readonly MarketPageEntry[] = []
 
 /**
- * 页面表单草稿的会话内覆盖值。引擎约定页面表单的值不落盘(只活在宿主侧脏值生命周期),
+ * 表单草稿的会话内覆盖值。引擎约定 slot 表单的值不落盘(只活在宿主侧脏值生命周期),
  * 所以动作载荷带表单时把草稿值记在这里,本会话内的取件与安装都按它解析来源;
  * 持久保存仍走插件设置页(settings:surface 的写侧归宿主),停用时清空。
  */
 let pageFormOverride: Record<string, PluginSettingValue> | null = null
 
 /**
- * 页面触发的安装入口;null 时用 installMarketPackage。
+ * slot 条目触发的安装入口;null 时用 installMarketPackage。
  * 测试注入点:替换后观察动作分发到安装层的参数,undefined 恢复默认。
  */
 export type MarketInstaller = (
@@ -122,12 +123,12 @@ export type MarketInstaller = (
 ) => Promise<MarketInstallResult>
 let pageInstaller: MarketInstaller | null = null
 
-/** 测试注入点:替换页面目录缓存时效判断用的时钟 */
+/** 测试注入点:替换 slot 目录缓存时效判断用的时钟 */
 export const setMarketPageClock = (clock?: () => number): void => {
   pageClock = clock ?? (() => Date.now())
 }
 
-/** 测试注入点:替换页面动作分发的安装入口 */
+/** 测试注入点:替换 slot 动作分发的安装入口 */
 export const setMarketInstaller = (installer?: MarketInstaller): void => {
   pageInstaller = installer ?? null
 }
@@ -147,8 +148,22 @@ export const setMarketInstaller = (installer?: MarketInstaller): void => {
 const INSTALL_SUCCESS_KEY = 'pluginAssetInstalled'
 const INSTALL_FAILED_KEY = 'pluginAssetInstallFailed'
 
-/** 激活时拿到的 notify 出口;未激活时页面动作不提示 */
+/** 激活时拿到的 notify 出口;未激活时 slot 动作不提示 */
 let notifier: ((key: string, params?: Record<string, string | number>) => void) | null = null
+
+/**
+ * 标题的宿主语言;激活时定一次,登记描述与数据模型共用,两侧标题不漂移。
+ * locale 取不到或抛错时按中文处理,与设置字段标签的取词口径一致。
+ */
+let slotLocale: MarketSlotLocale = 'zh-CN'
+
+const resolveSlotLocale = async (context: PluginContext): Promise<MarketSlotLocale> => {
+  try {
+    return (await context.settings.locale()) === 'en-US' ? 'en-US' : 'zh-CN'
+  } catch {
+    return 'zh-CN'
+  }
+}
 
 /** 市场安装记录与来源配置的存储键;单插件存储上限 64KB,记录裁到最近 50 条 */
 const MARKET_STORAGE_KEY = 'dsc-humanize/market/v1'
@@ -471,7 +486,7 @@ export const installMarketPackage = async (
   }
 }
 
-/** 页面动作失败的短原因:宿主提示参数里只带一段可读文本 */
+/** 动作失败的短原因:宿主提示参数里只带一段可读文本 */
 const shortReason = (error: unknown): string => {
   const text =
     error instanceof Error
@@ -489,7 +504,7 @@ const isCacheFresh = (sourceId: string): boolean => {
 }
 
 /**
- * 按既有 catalog 层刷新页面目录(设计 3.1 目录部分)。
+ * 按既有 catalog 层刷新 slot 目录(设计 3.1 目录部分)。
  * 单飞:进行中时直接复用同一个任务;force 为 true 时绕过缓存逐来源重新取件。
  * 每个来源的取件结果连同取件时刻写进短缓存;单个来源失败也记录失败结果,
  * 让模型层折叠成「来源不可用」一行,不阻断其他来源。
@@ -509,7 +524,7 @@ const refreshPageCatalog = (force = false): Promise<void> => {
         pageCatalogCache.set(source.id, { result, at: pageClock() })
       }
     } catch (error) {
-      log('页面目录刷新失败,保持已有缓存: ' + describeError(error))
+      log('目录刷新失败,保持已有缓存: ' + describeError(error))
     } finally {
       pagePullInFlight = null
     }
@@ -523,7 +538,7 @@ const refreshPageCatalog = (force = false): Promise<void> => {
  * 缓存缺失的来源给「读取中」占位,缓存过期的来源在后台补取件、本次先显示旧结果;
  * 需要补取件时发起单飞任务,取件完成后等宿主下一次索取模型或刷新指示。
  */
-const buildPageModelNow = (): PluginPageDescriptor => {
+const buildPageModelNow = (): PluginSlotDescriptor => {
   const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
   const results: MarketPageSourceResult[] = []
   let needsPull = false
@@ -545,51 +560,55 @@ const buildPageModelNow = (): PluginPageDescriptor => {
   if (needsPull && pagePullInFlight === null) {
     void refreshPageCatalog()
   }
-  const model = buildMarketPageModel(results)
+  const model = buildMarketPageModel(results, slotLocale)
   pageItemEntries = model.entries
   if (model.truncated) {
-    log('页面目录超过宿主页面描述的体积上限,已从尾部收敛条目: ' + MARKET_PAGE_ID)
+    log('目录超过宿主描述的体积上限,已从尾部收敛条目: ' + MARKET_SLOT_ID)
   }
   return model.descriptor
 }
 
-/** ui:page-data 挂载点:只回答资产市场这一页,其他页面回落到登记时的缺省模型 */
-const pageDataHandler: PluginPageDataHandler = (pageId) => {
-  if (pageId !== MARKET_PAGE_ID) return null
+/**
+ * ui:slot-data 挂载点:只回答资产市场这一条目,其他条目回落到登记时的缺省模型。
+ * 数据处理器同步返回描述;宿主按 (slot, id) 定位条目,描述渲染的挂载点
+ * 恒为登记时的 slot,不存在跨挂载点漂移。
+ */
+const pageDataHandler: PluginSlotDataHandler = (slot, id) => {
+  if (slot !== MARKET_SLOT || id !== MARKET_SLOT_ID) return null
   return buildPageModelNow()
 }
 
-/** 一次页面安装动作:分发到安装层,完成用 notify 提示成功或失败,不弹任何窗 */
+/** 一次安装动作:分发到安装层,完成用 notify 提示成功或失败,不弹任何窗 */
 const dispatchMarketInstall = async (entry: MarketPageEntry): Promise<void> => {
   const installer = pageInstaller ?? installMarketPackage
   try {
     const result = await installer(entry.sourceId, entry.author, entry.packageId)
     if (result.ok) {
       notifier?.(INSTALL_SUCCESS_KEY, { id: entry.packageId })
-      log('页面安装 ' + entry.packageId + ' 完成,来源 ' + entry.sourceId)
+      log('安装 ' + entry.packageId + ' 完成,来源 ' + entry.sourceId)
     } else {
       notifier?.(INSTALL_FAILED_KEY, {
         id: entry.packageId,
         reason: shortReason(result.error.code + ': ' + result.error.message),
       })
-      log('页面安装 ' + entry.packageId + ' 失败(' + result.error.code + '): ' + result.error.message)
+      log('安装 ' + entry.packageId + ' 失败(' + result.error.code + '): ' + result.error.message)
     }
   } catch (error) {
     notifier?.(INSTALL_FAILED_KEY, { id: entry.packageId, reason: shortReason(error) })
-    log('页面安装 ' + entry.packageId + ' 抛错: ' + describeError(error))
+    log('安装 ' + entry.packageId + ' 抛错: ' + describeError(error))
   }
 }
 
 /**
- * ui:page-action 挂载点:刷新目录返回刷新指示;安装动作按条目键查表分发,
+ * ui:slot-action 挂载点:刷新目录返回刷新指示;安装动作按条目键查表分发,
  * 查不到(模型已重建、条目过期)只记日志;载荷带表单草稿时先在本会话内生效。
  */
-const pageActionHandler = (payload: PluginPageActionPayload): PluginPageActionResponse | undefined => {
-  if (payload.pageId !== MARKET_PAGE_ID) return undefined
+const pageActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionResponse | undefined => {
+  if (payload.slot !== MARKET_SLOT || payload.id !== MARKET_SLOT_ID) return undefined
   const formValues = readPageFormValues(payload.form)
   if (formValues !== null) {
     pageFormOverride = formValues
-    log('页面表单草稿已生效(本会话内覆盖设置值参与来源解析,不落盘)')
+    log('表单草稿已生效(本会话内覆盖设置值参与来源解析,不落盘)')
   }
   if (payload.actionId === REFRESH_ACTION_KEY) {
     void refreshPageCatalog(true)
@@ -650,28 +669,30 @@ export const activate = async (context: PluginContext): Promise<void> => {
     log('登记资产市场设置字段失败,来源开关按缺省处理: ' + describeError(error))
   }
 
-  // 资产市场页面:登记页面描述与动作、数据两个挂载点;宿主没有 ui:page 能力时跳过,不阻断激活
+  // 资产市场 slot:登记会话视图标签栏条目与动作、数据两个挂载点;宿主没有 ui:slot 能力时跳过,不阻断激活
   notifier = (key, params) => context.ui.notify(key, params)
   try {
-    if (typeof context.ui.registerPage === 'function') {
-      // 登记时的缺省模型:目录尚无缓存,列表为空;宿主索取模型时由数据挂载点补全
-      context.ui.registerPage(buildMarketPageModel([]).descriptor)
-      log('已登记资产市场页面(ui:page): ' + MARKET_PAGE_ID)
+    if (typeof context.ui.registerSlot === 'function') {
+      // 登记时的缺省模型:目录尚无缓存,列表为空;宿主索取模型时由数据挂载点补全。
+      // 标题按宿主语言取成对词条的一侧,order 按标签栏的排期约定取 50。
+      slotLocale = await resolveSlotLocale(context)
+      context.ui.registerSlot(MARKET_SLOT, buildMarketPageModel([], slotLocale).descriptor)
+      log('已登记资产市场 slot(' + MARKET_SLOT + '): ' + MARKET_SLOT_ID)
     } else {
-      log('宿主没有 ui:page 页面能力,资产市场页面不可用')
+      log('宿主没有 ui:slot 能力,资产市场标签不可用')
     }
   } catch (error) {
-    log('登记资产市场页面失败,页面不可用但不阻断激活: ' + describeError(error))
+    log('登记资产市场 slot 失败,标签不可用但不阻断激活: ' + describeError(error))
   }
   try {
-    if (typeof context.ui.onPageAction === 'function') {
-      context.ui.onPageAction(pageActionHandler)
+    if (typeof context.ui.onSlotAction === 'function') {
+      context.ui.onSlotAction(pageActionHandler)
     }
-    if (typeof context.ui.onPageData === 'function') {
-      context.ui.onPageData(pageDataHandler)
+    if (typeof context.ui.onSlotData === 'function') {
+      context.ui.onSlotData(pageDataHandler)
     }
   } catch (error) {
-    log('登记页面动作或数据挂载点失败,页面静态显示: ' + describeError(error))
+    log('登记 slot 动作或数据挂载点失败,条目静态显示: ' + describeError(error))
   }
 
   context.log(
@@ -730,5 +751,6 @@ export const deactivate = (): void => {
   pageFormOverride = null
   pageInstaller = null
   pageClock = () => Date.now()
+  slotLocale = 'zh-CN'
   active = false
 }

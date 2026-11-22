@@ -168,11 +168,11 @@ if (portInner === null || portAwesome === null) {
 }
 
 const { activate, deactivate, fetchMarketCatalog, installMarketPackage, getMarketTransport } = await import('../src/index.ts')
-const { MARKET_PAGE_ID, INSTALL_ACTION_KEY, REFRESH_ACTION_KEY, SOURCE_UNAVAILABLE_BADGE, SOURCE_PENDING_BADGE } = await import('../src/market/page.ts')
+const { MARKET_SLOT, MARKET_SLOT_ID, INSTALL_ACTION_KEY, REFRESH_ACTION_KEY, SOURCE_UNAVAILABLE_BADGE, SOURCE_PENDING_BADGE } = await import('../src/market/page.ts')
 
 const storageMap = new Map()
 const logs = []
-const pages = []
+const slotEntries = []
 const actionHandlers = []
 const dataHandlers = []
 const notices = []
@@ -184,15 +184,15 @@ const context = {
   events: { on: () => () => undefined },
   ui: {
     notify: (key, params) => notices.push({ key, params }),
-    registerPage: (descriptor) => {
-      pages.push(descriptor)
+    registerSlot: (slot, descriptor) => {
+      slotEntries.push({ slot, descriptor })
       return { id: descriptor.id, dispose: () => undefined }
     },
-    onPageAction: (handler) => {
+    onSlotAction: (handler) => {
       actionHandlers.push(handler)
       return () => undefined
     },
-    onPageData: (handler) => {
+    onSlotData: (handler) => {
       dataHandlers.push(handler)
       return () => undefined
     },
@@ -247,18 +247,18 @@ if (installed.ok) {
 const record = storageMap.get('dsc-humanize/market/v1')
 check('存储里的安装记录可读', Array.isArray(record?.installs) && record.installs.length === 1)
 
-/* ---------- 页面链路:登记 → 拉目录 → 模型生成 → 动作分发 → 安装成功 ---------- */
+/* ---------- slot 链路:登记 → 拉目录 → 模型生成 → 动作分发 → 安装成功 ---------- */
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const waitUntil = async (probe) => {
   for (let attempt = 0; attempt < 400 && !probe(); attempt += 1) await sleep(5)
 }
-const pageModel = () => dataHandlers[0](MARKET_PAGE_ID)
+const pageModel = () => dataHandlers[0](MARKET_SLOT, MARKET_SLOT_ID)
 const listBlockOf = (descriptor) => descriptor?.blocks?.find((block) => block.type === 'list')
 
-check('页面已登记且 id 正确', pages.length === 1 && pages[0]?.id === MARKET_PAGE_ID)
-check('动作经 ui:page-action 挂载点接收', actionHandlers.length === 1)
-check('模型经 ui:page-data 挂载点接收', dataHandlers.length === 1)
+check('条目已登记到 conversation.tabs 且 id 正确', slotEntries.length === 1 && slotEntries[0]?.slot === MARKET_SLOT && slotEntries[0]?.descriptor.id === MARKET_SLOT_ID)
+check('动作经 ui:slot-action 挂载点接收', actionHandlers.length === 1)
+check('模型经 ui:slot-data 挂载点接收', dataHandlers.length === 1)
 
 // 第一次进入:缓存为空,显示「读取中」占位并在后台取件
 const firstList = listBlockOf(pageModel())
@@ -283,14 +283,14 @@ check('actions 区块有刷新目录', pageModel()?.blocks?.some((block) => bloc
 const innerItem = settledList?.items?.find((item) => item.title === PKG)
 check('安装条目带来源徽标', innerItem !== undefined && innerItem.badge === '组织预设资产包')
 notices.length = 0
-actionHandlers[0]({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: innerItem.key })
+actionHandlers[0]({ slot: MARKET_SLOT, id: MARKET_SLOT_ID, actionId: INSTALL_ACTION_KEY, itemKey: innerItem.key })
 await waitUntil(() => notices.length > 0)
 check('安装动作成功提示走资产专用键', notices.some((n) => n.key === 'pluginAssetInstalled' && n.params?.id === PKG), JSON.stringify(notices))
 check('安装动作后安装记录新增', storageMap.get('dsc-humanize/market/v1')?.installs?.length === 2)
 
 // 失败降级:撤掉 awesome 侧 meta.json 并强制刷新,该来源折叠成「来源不可用」一行
 awesomeTable.delete('meta.json')
-check('刷新动作返回刷新指示', actionHandlers[0]({ pageId: MARKET_PAGE_ID, actionId: REFRESH_ACTION_KEY })?.refresh === true)
+check('刷新动作返回刷新指示', actionHandlers[0]({ slot: MARKET_SLOT, id: MARKET_SLOT_ID, actionId: REFRESH_ACTION_KEY })?.refresh === true)
 await waitUntil(() => {
   const list = listBlockOf(pageModel())
   return list?.items?.some((item) => item.badge === SOURCE_UNAVAILABLE_BADGE) === true
@@ -302,5 +302,5 @@ check('只提示不阻断:另一来源照常列出', degradedList?.items?.some((
 deactivate()
 closeAll()
 
-console.log(failures === 0 ? '冒烟通过:目录取件、页面模型、动作分发与安装全链路(127.0.0.1:' + portInner + ' 与 127.0.0.1:' + portAwesome + ')' : '冒烟存在失败项 ' + failures + ' 个')
+console.log(failures === 0 ? '冒烟通过:目录取件、slot 模型、动作分发与安装全链路(127.0.0.1:' + portInner + ' 与 127.0.0.1:' + portAwesome + ')' : '冒烟存在失败项 ' + failures + ' 个')
 process.exitCode = failures === 0 ? 0 : 1

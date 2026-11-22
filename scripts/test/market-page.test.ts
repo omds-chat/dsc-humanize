@@ -1,22 +1,22 @@
 /**
- * 资产市场页面(ui:page)的测试:内存替身覆盖页面模型生成(两来源、安装动作、
- * 刷新)、动作分发到安装层的参数、失败降级形态(来源不可用折叠成一行说明)与
- * 目录短缓存的时效。不发任何真实请求,也不装依赖。
+ * 资产市场 slot(ui:slot)的测试:内存替身覆盖 slot 描述生成(两来源、安装动作、
+ * 刷新)、动作分发到安装层的参数、失败降级形态(来源不可用折叠成一行说明)、
+ * descriptor 与登记挂载点的一致性,以及目录短缓存的时效。不发任何真实请求,也不装依赖。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildMarketPageModel, MARKET_PAGE_ID, MARKET_PAGE_TITLE, SOURCE_UNAVAILABLE_BADGE, SOURCE_PENDING_BADGE, INSTALL_ACTION_KEY, REFRESH_ACTION_KEY } from '../../src/market/page.ts'
+import { buildMarketPageModel, MARKET_SLOT, MARKET_SLOT_ID, MARKET_SLOT_LABELS, SOURCE_UNAVAILABLE_BADGE, SOURCE_PENDING_BADGE, INSTALL_ACTION_KEY, REFRESH_ACTION_KEY } from '../../src/market/page.ts'
 import type { MarketPageSourceResult, MarketPageEntry } from '../../src/market/page.ts'
 import type { CatalogResult } from '../../src/market/catalog.ts'
 import type { MarketSource } from '../../src/market/sources.ts'
 import type {
   DscMount,
   PluginContext,
-  PluginPageActionHandler,
-  PluginPageActionResponse,
-  PluginPageDataHandler,
-  PluginPageDescriptor,
+  PluginSlotActionHandler,
+  PluginSlotActionResponse,
+  PluginSlotDataHandler,
+  PluginSlotDescriptor,
   PluginSettingDescriptor,
   PluginSettingValue,
 } from '../../src/types.ts'
@@ -49,8 +49,8 @@ test('page model: 两个来源各列出包条目,徽标与安装参数对应', (
     { source: awesome, catalog: catalogOk(awesome, [{ id: 'pkg-b', author: 'someone', types: [] }]) },
   ]
   const model = buildMarketPageModel(results)
-  assert.equal(model.descriptor.id, MARKET_PAGE_ID)
-  assert.equal(model.descriptor.title, MARKET_PAGE_TITLE)
+  assert.equal(model.descriptor.id, MARKET_SLOT_ID)
+  assert.equal(model.descriptor.title, MARKET_SLOT_LABELS['zh-CN'])
   const blocks = model.descriptor.blocks
   assert.deepEqual(blocks.map((block) => block.type), ['text', 'list', 'form', 'actions'])
 
@@ -147,11 +147,17 @@ const awesomeIndex = JSON.stringify([
   { id: 'pkg-c', author: 'someone', tag: [], types: ['persona'] },
 ])
 
+/** registerSlot 的一次登记记录;slot 与描述成对保留,供一致性断言使用 */
+interface SlotRegistration {
+  slot: string
+  descriptor: PluginSlotDescriptor
+}
+
 interface FakeContext {
   context: PluginContext
-  pages: PluginPageDescriptor[]
-  actionHandlers: PluginPageActionHandler[]
-  dataHandlers: PluginPageDataHandler[]
+  slotRegistrations: SlotRegistration[]
+  actionHandlers: PluginSlotActionHandler[]
+  dataHandlers: PluginSlotDataHandler[]
   logs: string[]
   notices: { key: string; params?: Record<string, string | number> }[]
   registrations: PluginSettingDescriptor[]
@@ -160,9 +166,9 @@ interface FakeContext {
 }
 
 const createFakeContext = (table: Map<string, string | number | null>): FakeContext => {
-  const pages: PluginPageDescriptor[] = []
-  const actionHandlers: PluginPageActionHandler[] = []
-  const dataHandlers: PluginPageDataHandler[] = []
+  const slotRegistrations: SlotRegistration[] = []
+  const actionHandlers: PluginSlotActionHandler[] = []
+  const dataHandlers: PluginSlotDataHandler[] = []
   const logs: string[] = []
   const notices: { key: string; params?: Record<string, string | number> }[] = []
   const registrations: PluginSettingDescriptor[] = []
@@ -187,15 +193,15 @@ const createFakeContext = (table: Map<string, string | number | null>): FakeCont
       notify: (key, params) => {
         notices.push({ key, ...(params === undefined ? {} : { params }) })
       },
-      registerPage: (descriptor) => {
-        pages.push(descriptor)
+      registerSlot: (slot: string, descriptor: PluginSlotDescriptor) => {
+        slotRegistrations.push({ slot, descriptor })
         return { id: descriptor.id, dispose: () => undefined }
       },
-      onPageAction: (handler) => {
+      onSlotAction: (handler) => {
         actionHandlers.push(handler)
         return () => undefined
       },
-      onPageData: (handler) => {
+      onSlotData: (handler) => {
         dataHandlers.push(handler)
         return () => undefined
       },
@@ -231,7 +237,7 @@ const createFakeContext = (table: Map<string, string | number | null>): FakeCont
       onBeforeRequest: () => () => undefined,
     },
   }
-  return { context, pages, actionHandlers, dataHandlers, logs, notices, registrations, settingsValues, reads }
+  return { context, slotRegistrations, actionHandlers, dataHandlers, logs, notices, registrations, settingsValues, reads }
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -257,20 +263,35 @@ const waitUntil = async (probe: () => boolean): Promise<void> => {
   }
 }
 
-test('activate: 登记 ui:page 页面、动作与数据挂载点,清单已申请对应能力', async () => {
+test('activate: 登记 ui:slot 条目、动作与数据挂载点,descriptor 的 slot 与登记时一致', async () => {
   reset()
   ;(globalThis as Record<string, unknown>).__INNER_ASSET_PAGES_URL__ = INNER_URL
   ;(globalThis as Record<string, unknown>).__AWESOME_ASSET_PAGES_URL__ = AWESOME_URL
   const fake = createFakeContext(happyTable())
   await activate(fake.context)
 
-  assert.equal(fake.pages.length, 1)
-  assert.equal(fake.pages[0]?.id, MARKET_PAGE_ID)
+  assert.equal(fake.slotRegistrations.length, 1)
+  // descriptor 的 slot 与登记时一致:登记到 conversation.tabs,条目 id 用 asset-market
+  assert.equal(fake.slotRegistrations[0]?.slot, MARKET_SLOT)
+  assert.equal(fake.slotRegistrations[0]?.descriptor.id, MARKET_SLOT_ID)
+  // 标题成对登记(沿用设置字段标签的词条做法),order 按标签栏排期约定取 50
+  assert.equal(fake.slotRegistrations[0]?.descriptor.title, MARKET_SLOT_LABELS['zh-CN'])
+  assert.equal(MARKET_SLOT_LABELS['en-US'], 'Asset market')
+  assert.equal(fake.slotRegistrations[0]?.descriptor.order, 50)
   assert.equal(fake.actionHandlers.length, 1)
   assert.equal(fake.dataHandlers.length, 1)
-  assert.ok(fake.logs.some((line) => line.includes('已登记资产市场页面')))
-  // 两个挂载点各自占用一个 ui:page 登记名额(引擎限流 20 次 / 10 秒)
+  assert.ok(fake.logs.some((line) => line.includes('已登记资产市场 slot')))
+  // 两个挂载点各自占用一个 ui:slot 登记名额(引擎限流 20 次 / 10 秒)
   assert.ok(fake.logs.some((line) => line.includes('资产市场设置字段')))
+
+  // 数据处理器返回的描述与登记时一致;换了挂载点或条目 id 都回落缺省(null)
+  const data = fake.dataHandlers[0]
+  assert.ok(data !== undefined)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
+  assert.ok(model !== null)
+  assert.equal(model.id, MARKET_SLOT_ID)
+  assert.equal(data('nav.panel', MARKET_SLOT_ID), null)
+  assert.equal(data(MARKET_SLOT, 'other-entry'), null)
 })
 
 test('data 挂载点: 首次进入显示「读取中」,后台取件完成后列出两来源的包', async () => {
@@ -282,20 +303,20 @@ test('data 挂载点: 首次进入显示「读取中」,后台取件完成后列
   const data = fake.dataHandlers[0]
   assert.ok(data !== undefined)
 
-  const first = data(MARKET_PAGE_ID)
+  const first = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(first !== null)
   const firstList = first.blocks[1]
   assert.ok(firstList?.type === 'list')
   assert.ok(firstList.items.every((item) => item.badge === SOURCE_PENDING_BADGE))
 
   await waitUntil(() => {
-    const model = data(MARKET_PAGE_ID)
+    const model = data(MARKET_SLOT, MARKET_SLOT_ID)
     if (model === null) return false
     const list = model.blocks[1]
     return list?.type === 'list' && list.items.some((item) => item.badge !== SOURCE_PENDING_BADGE)
   })
 
-  const settled = data(MARKET_PAGE_ID)
+  const settled = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(settled !== null)
   const list = settled.blocks[1]
   assert.ok(list?.type === 'list')
@@ -315,12 +336,12 @@ test('data 挂载点: 缓存时效内的重复索取不重复取件', async () =
   const data = fake.dataHandlers[0]
   assert.ok(data !== undefined)
 
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   await waitUntil(() => fake.reads.filter((url) => url.endsWith('assets.json')).length >= 2)
   const afterFirstPull = fake.reads.length
 
-  data(MARKET_PAGE_ID)
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.equal(fake.reads.length, afterFirstPull)
 })
 
@@ -334,12 +355,13 @@ test('refresh 动作: 返回刷新指示并绕过缓存重新取件', async () =
   const action = fake.actionHandlers[0]
   assert.ok(data !== undefined && action !== undefined)
 
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   await waitUntil(() => fake.reads.filter((url) => url.endsWith('assets.json')).length >= 2)
   const before = fake.reads.length
 
-  const response: PluginPageActionResponse | undefined = action({
-    pageId: MARKET_PAGE_ID,
+  const response: PluginSlotActionResponse | undefined = action({
+    slot: MARKET_SLOT,
+    id: MARKET_SLOT_ID,
     actionId: REFRESH_ACTION_KEY,
   })
   assert.deepEqual(response, { refresh: true })
@@ -381,16 +403,16 @@ test('install 动作: 按条目键分发到安装层,成功用 notify 提示', a
     }
   })
 
-  data(MARKET_PAGE_ID)
-  await waitUntil(() => data(MARKET_PAGE_ID)?.blocks[1]?.type === 'list' && (data(MARKET_PAGE_ID)?.blocks[1] as { items?: { badge?: string }[] })?.items?.some((item) => item.badge !== SOURCE_PENDING_BADGE) === true)
-  const model = data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
+  await waitUntil(() => data(MARKET_SLOT, MARKET_SLOT_ID)?.blocks[1]?.type === 'list' && (data(MARKET_SLOT, MARKET_SLOT_ID)?.blocks[1] as { items?: { badge?: string }[] })?.items?.some((item) => item.badge !== SOURCE_PENDING_BADGE) === true)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   const list = model.blocks[1]
   assert.ok(list?.type === 'list')
   const target = list.items[0]
   assert.ok(target !== undefined)
 
-  action({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
+  action({ slot: MARKET_SLOT, id: MARKET_SLOT_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
   await waitUntil(() => fake.notices.length > 0)
   assert.deepEqual(calls, [{ sourceId: 'dsc-humanize-inner-asset', author: 'omds-chat', packageId: 'pkg-a' }])
   assert.equal(fake.notices[0]?.key, 'pluginAssetInstalled')
@@ -412,20 +434,20 @@ test('install 动作: 安装失败降级为失败提示,不弹窗不阻断', asy
     error: { code: 'manifest-missing', message: '包层清单缺失,无法安全取件: pkg-a' },
   }))
 
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   await waitUntil(() => {
-    const model = data(MARKET_PAGE_ID)
+    const model = data(MARKET_SLOT, MARKET_SLOT_ID)
     const list = model?.blocks[1]
     return list?.type === 'list' && list.items.some((item) => item.badge !== SOURCE_PENDING_BADGE)
   })
-  const model = data(MARKET_PAGE_ID)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   const list = model.blocks[1]
   assert.ok(list?.type === 'list')
   const target = list.items[0]
   assert.ok(target !== undefined)
 
-  action({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
+  action({ slot: MARKET_SLOT, id: MARKET_SLOT_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
   await waitUntil(() => fake.notices.length > 0)
   assert.equal(fake.notices[0]?.key, 'pluginAssetInstallFailed')
   assert.equal(fake.notices[0]?.params?.id, 'pkg-a')
@@ -447,7 +469,7 @@ test('install 动作: 过期条目键被忽略且不分发', async () => {
     throw new Error('should not be called')
   })
 
-  action({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: 'pkg-999' })
+  action({ slot: MARKET_SLOT, id: MARKET_SLOT_ID, actionId: INSTALL_ACTION_KEY, itemKey: 'pkg-999' })
   await sleep(20)
   assert.equal(calls.length, 0)
   assert.equal(fake.notices.length, 0)
@@ -466,13 +488,13 @@ test('来源取件失败: 页面折叠为「来源不可用」一行,另一来�
   const data = fake.dataHandlers[0]
   assert.ok(data !== undefined)
 
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   await waitUntil(() => {
-    const model = data(MARKET_PAGE_ID)
+    const model = data(MARKET_SLOT, MARKET_SLOT_ID)
     const list = model?.blocks[1]
     return list?.type === 'list' && list.items.some((item) => item.badge === SOURCE_UNAVAILABLE_BADGE)
   })
-  const model = data(MARKET_PAGE_ID)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   const list = model.blocks[1]
   assert.ok(list?.type === 'list')
@@ -493,13 +515,13 @@ test('来源开关关闭: 关闭的来源不取件也不出现在模型里', asy
   const data = fake.dataHandlers[0]
   assert.ok(data !== undefined)
 
-  data(MARKET_PAGE_ID)
+  data(MARKET_SLOT, MARKET_SLOT_ID)
   await waitUntil(() => {
-    const model = data(MARKET_PAGE_ID)
+    const model = data(MARKET_SLOT, MARKET_SLOT_ID)
     const list = model?.blocks[1]
     return list?.type === 'list' && list.items.some((item) => item.badge !== SOURCE_PENDING_BADGE)
   })
-  const model = data(MARKET_PAGE_ID)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   const list = model.blocks[1]
   assert.ok(list?.type === 'list')
@@ -519,14 +541,15 @@ test('表单草稿: 动作载荷的表单值在本会话内覆盖设置值参与
   assert.ok(data !== undefined && action !== undefined)
 
   action({
-    pageId: MARKET_PAGE_ID,
+    slot: MARKET_SLOT,
+    id: MARKET_SLOT_ID,
     actionId: REFRESH_ACTION_KEY,
     form: { 'inner-asset-source': false, 'awesome-asset-source': true },
   })
   await waitUntil(() => fake.reads.filter((url) => url.endsWith('assets.json')).length >= 1)
   assert.ok(fake.reads.every((url) => !url.startsWith(INNER_URL)), '关闭的来源不发请求')
 
-  const model = data(MARKET_PAGE_ID)
+  const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   const list = model.blocks[1]
   assert.ok(list?.type === 'list')

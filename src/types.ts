@@ -15,14 +15,14 @@ export type DscCapability =
   | 'notify'
   | 'settings:locale'
   | 'settings:surface'
-  | 'ui:page'
+  | 'ui:slot'
   | 'plugins:storage'
   | 'net:fetch'
   | 'assets:read'
   | 'chat:request'
 
-/** 挂载点:会话切换事件、请求前环节与插件页面的动作、数据挂载点 */
-export type DscMount = 'session:changed' | 'chat:before-request' | 'ui:page-action' | 'ui:page-data'
+/** 挂载点:会话切换事件、请求前环节与 ui:slot 的动作、数据挂载点 */
+export type DscMount = 'session:changed' | 'chat:before-request' | 'ui:slot-action' | 'ui:slot-data'
 
 /**
  * 插件清单。
@@ -40,6 +40,8 @@ export interface PluginManifest {
   conflicts?: string[]
   capabilities: DscCapability[]
   mounts?: DscMount[]
+  /** ui:slot 的登记白名单;登记的 slot 必须在清单内,否则被拒绝(slot-not-granted) */
+  slots?: PluginSlotName[]
 }
 
 /** 异步能力的通用选项,取消时抛 PluginAbortError */
@@ -110,18 +112,25 @@ export interface PluginEventsApi {
 }
 
 /**
- * 页面动作按钮的描述;actions 区块与 list 区块的逐条动作共用这一形态。
+ * ui:slot 的挂载点枚举;取值来自引擎的封闭词表,未知名的登记会被拒绝。
+ * nav.panel:侧边栏顶部导航行 + 主区整页;
+ * conversation.tabs:会话视图标签栏里的一个标签 + 主区整页。
+ */
+export type PluginSlotName = 'nav.panel' | 'conversation.tabs'
+
+/**
+ * 动作按钮的描述;actions 区块与 list 区块的逐条动作共用这一形态。
  * 与宿主 dsc-plugin-engine 的 PageActionDescriptor 对齐。
  */
-export interface PluginPageActionDescriptor {
+export interface PluginSlotActionDescriptor {
   /** 动作键;回调时作为 actionId 交给插件 */
   readonly key: string
   readonly labelKey?: string
   readonly label?: string
 }
 
-/** 页面 list 区块的单个条目 */
-export interface PluginPageListItemDescriptor {
+/** list 区块的单个条目 */
+export interface PluginSlotListItemDescriptor {
   /** 条目键;逐条动作回调时作为 itemKey 交给插件 */
   readonly key: string
   readonly titleKey?: string
@@ -131,93 +140,116 @@ export interface PluginPageListItemDescriptor {
   readonly badge?: string
 }
 
-/** 页面 list 区块;条目数组,可带一个逐条动作 */
-export interface PluginPageListBlock {
+/** list 区块;条目数组,可带一个逐条动作 */
+export interface PluginSlotListBlock {
   readonly id: string
   readonly type: 'list'
-  readonly items: readonly PluginPageListItemDescriptor[]
-  readonly itemAction?: PluginPageActionDescriptor
+  readonly items: readonly PluginSlotListItemDescriptor[]
+  readonly itemAction?: PluginSlotActionDescriptor
 }
 
-/** 页面 form 区块;复用设置字段的五种描述,值的生命周期归宿主表单模型 */
-export interface PluginPageFormBlock {
+/** form 区块;复用设置字段的五种描述,值的生命周期归宿主表单模型 */
+export interface PluginSlotFormBlock {
   readonly id: string
   readonly type: 'form'
   readonly fields: readonly PluginSettingFieldDescriptor[]
 }
 
-/** 页面 text 区块;静态说明文字 */
-export interface PluginPageTextBlock {
+/** text 区块;静态说明文字 */
+export interface PluginSlotTextBlock {
   readonly id: string
   readonly type: 'text'
   readonly text: string
 }
 
-/** 页面 actions 区块;按钮组 */
-export interface PluginPageActionsBlock {
+/** actions 区块;按钮组 */
+export interface PluginSlotActionsBlock {
   readonly id: string
   readonly type: 'actions'
-  readonly items: readonly PluginPageActionDescriptor[]
+  readonly items: readonly PluginSlotActionDescriptor[]
 }
 
-/** 页面区块的四种类型;控件形态由宿主按类型渲染,插件不交控件 */
-export type PluginPageBlock =
-  | PluginPageListBlock
-  | PluginPageFormBlock
-  | PluginPageTextBlock
-  | PluginPageActionsBlock
+/** 区块的四种类型;控件形态由宿主按类型渲染,插件不交控件 */
+export type PluginSlotBlock =
+  | PluginSlotListBlock
+  | PluginSlotFormBlock
+  | PluginSlotTextBlock
+  | PluginSlotActionsBlock
 
-/** registerPage 返回的句柄;释放函数撤销该页面的登记 */
-export interface PluginPageHandle {
+/** registerSlot 返回的句柄;释放函数撤销该 slot 的登记 */
+export interface PluginSlotHandle {
   readonly id: string
   dispose(): void
 }
 
 /**
- * 一份插件页面描述。
- * 与宿主 dsc-plugin-engine 的 PageDescriptor 对齐:id 与区块 id、条目键、动作键
- * 共用 settings 字段键的词表(^\a-z\[a-z0-9-]\{0,63}\$),描述序列化后不超过 8KB。
+ * 一份 slot 描述:声明登记到哪个 slot 与这个 slot 里的条目。
+ * id、order、iconKey 与区块 id、条目键、动作键共用 settings 字段键的词表
+ * (^[a-z][a-z0-9-]{0,63}$),描述序列化后不超过 8KB;
+ * 同一 slot 内 id 重复、slot 不在枚举或不在清单白名单、blocks 非法时
+ * 登记即拒绝并给结构化错误。
  */
-export interface PluginPageDescriptor {
-  /** 页面 id;同一插件内不得重复,与插件 id 共同构成页面入口的键 */
+export interface PluginSlotDescriptor {
+  /** 条目 id;同一 slot 内不得重复 */
   readonly id: string
+  /** 条目标题;与 titleKey 二选一 */
   readonly titleKey?: string
   readonly title?: string
-  readonly blocks: readonly PluginPageBlock[]
+  /** 宿主图标字典的键 */
+  readonly iconKey?: string
+  /** 排序权重;宿主按 order 升序排列,同 order 按登记顺序 */
+  readonly order?: number
+  /** 主区整页的区块序列 */
+  readonly blocks: readonly PluginSlotBlock[]
 }
 
-/** 页面动作回调的载荷;form 是宿主收集的页面表单草稿值,页面没有表单区块时不出现 */
-export interface PluginPageActionPayload {
-  readonly pageId: string
+/** 带挂载点的 slot 描述;registerSlot 的实参 */
+export interface PluginSlotRegistration {
+  /** 登记到哪个 slot;取值来自 PluginSlotName,且须在清单 slots 白名单内 */
+  readonly slot: PluginSlotName
+  readonly descriptor: PluginSlotDescriptor
+}
+
+/** slot 动作回调的载荷;form 是宿主收集的表单草稿值,描述没有 form 区块时不出现 */
+export interface PluginSlotActionPayload {
+  readonly slot: PluginSlotName
+  /** 触发动作的条目 id,即 descriptor.id */
+  readonly id: string
   readonly actionId: string
   readonly itemKey?: string
   readonly form?: Record<string, PluginSettingValue>
 }
 
-/** 页面动作回调的返回;refresh 为 true 时宿主重新向插件索取页面模型 */
-export interface PluginPageActionResponse {
+/** slot 动作回调的返回;refresh 为 true 时宿主重新向插件索取该 slot 的模型 */
+export interface PluginSlotActionResponse {
   readonly refresh?: boolean
 }
 
-export type PluginPageActionHandler = (
-  payload: PluginPageActionPayload,
-) => PluginPageActionResponse | undefined
-
-/** 页面数据处理器;同步返回当前页面模型,返回空值表示沿用登记时的缺省模型 */
-export type PluginPageDataHandler = (pageId: string) => PluginPageDescriptor | null | undefined
+export type PluginSlotActionHandler = (
+  payload: PluginSlotActionPayload,
+) => PluginSlotActionResponse | undefined
 
 /**
- * 能力 notify 与 ui:page。
+ * slot 数据处理器;同步返回当前 slot 的模型。
+ * 返回描述时其 slot 字段必须与登记时一致;返回空值表示沿用登记时的缺省模型。
+ */
+export type PluginSlotDataHandler = (
+  slot: PluginSlotName,
+  id: string,
+) => PluginSlotDescriptor | null | undefined
+
+/**
+ * 能力 notify 与 ui:slot。
  * notify 的 key 取自宿主 i18n 的既有文案键,插件不自造文案;
- * registerPage 登记一份声明式页面描述,宿主据此渲染页面,描述非法时抛 PluginPageError;
- * onPageAction 与 onPageData 分别登记页面动作回调与页面数据索取处理器,
- * 都要求清单声明对应挂载点,登记返回释放函数,停用随引擎清理。
+ * registerSlot 按 (slot, id) 登记一份声明式 slot 描述,宿主据此渲染挂载点,
+ * 描述非法时抛结构化错误;onSlotAction 与 onSlotData 分别登记 slot 动作回调
+ * 与数据索取处理器,都要求清单声明对应挂载点,登记返回释放函数,停用随引擎清理。
  */
 export interface PluginUiApi {
   notify(key: string, params?: Record<string, string | number>): void
-  registerPage(descriptor: PluginPageDescriptor): PluginPageHandle
-  onPageAction(handler: PluginPageActionHandler): () => void
-  onPageData(handler: PluginPageDataHandler): () => void
+  registerSlot(slot: PluginSlotName, descriptor: PluginSlotDescriptor): PluginSlotHandle
+  onSlotAction(handler: PluginSlotActionHandler): () => void
+  onSlotData(handler: PluginSlotDataHandler): () => void
 }
 
 /** 设置字段的类型;控件形态由宿主按类型渲染,插件只交描述、不交控件 */
