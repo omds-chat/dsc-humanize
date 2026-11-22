@@ -271,7 +271,7 @@ test('activate: 登记 ui:slot 条目、动作与数据挂载点,descriptor 的 
   const fake = createFakeContext(happyTable())
   await activate(fake.context)
 
-  // 本插件登记三处落点:资产市场标签、人性化按钮、资产状态通知;这里只断言市场这条
+  // 本插件登记四处落点:资产市场标签、资产来源设置页、人性化按钮、资产状态通知;这里只断言市场这条
   const market = fake.slotRegistrations.find((entry) => entry.slot === MARKET_SLOT)
   assert.ok(market !== undefined)
   assert.equal(market.descriptor.id, MARKET_SLOT_ID)
@@ -279,10 +279,11 @@ test('activate: 登记 ui:slot 条目、动作与数据挂载点,descriptor 的 
   assert.equal('title' in market.descriptor ? market.descriptor.title : undefined, MARKET_SLOT_LABELS['zh-CN'])
   assert.equal(MARKET_SLOT_LABELS['en-US'], 'Asset market')
   assert.equal(market.descriptor.order, 50)
-  // 动作回调按槽位各登记一份(引擎按插件只保留最后一份,载荷 slot 分流);
-  // 数据处理器只有页面型槽位需要
-  assert.equal(fake.actionHandlers.length, 2)
-  assert.equal(fake.dataHandlers.length, 1)
+  // 动作回调按槽位各登记一份(引擎按插件只保留最后一份,载荷 slot 分流):
+  // 资产市场标签、资产来源设置页与人性化按钮三份;数据处理器只有页面型槽位需要
+  // (资产市场标签与资产来源设置页两组登记,引擎同样只保留最后一份)
+  assert.equal(fake.actionHandlers.length, 3)
+  assert.equal(fake.dataHandlers.length, 2)
   assert.ok(fake.logs.some((line) => line.includes('已登记资产市场 slot')))
   // 两个挂载点各自占用一个 ui:slot 登记名额(引擎限流 20 次 / 10 秒)
   assert.ok(fake.logs.some((line) => line.includes('资产市场设置字段')))

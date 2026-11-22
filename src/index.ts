@@ -36,6 +36,17 @@ import {
   REWRITE_TOGGLE_NOTICE_KEY,
   rewriteToggleNoticeParams,
 } from './slots/rewrite-switch.js'
+import {
+  buildSettingsPageDescriptor,
+  createAssetSourcesRecord,
+  mergeSourceValues,
+  readAssetSourcesRecord,
+  readSourcesFormValues,
+  SAVE_SOURCES_ACTION_KEY,
+  SETTINGS_PAGE_ID,
+  SETTINGS_PAGE_SLOT,
+  SETTINGS_PAGE_STORAGE_KEY,
+} from './slots/settings-page.js'
 import { describeTrustVerdict, verifySourceTrust } from './trust/source-verdict.js'
 import type { AssetTrustVerdict } from './trust/source-verdict.js'
 import type {
@@ -100,6 +111,23 @@ let marketTransport: AssetTextTransport | null = null
  * 来源开关与自建来源字段的生效值在每次目录取件时重新读取,不做缓存。
  */
 let marketSettingsValues: () => Record<string, PluginSettingValue> | null = () => null
+
+/**
+ * 设置页(settings.page)保存的来源配置,激活时从插件存储读取,保存动作写回。
+ * null 表示没有保存记录(键缺失、形状不符或版本不符),来源解析回落到宿主设置值。
+ * 存储键见 settings-page.ts 的 SETTINGS_PAGE_STORAGE_KEY。
+ */
+let savedSourceValues: Record<string, PluginSettingValue> | null = null
+
+/**
+ * 当前生效的来源配置值:设置页保存值优先,其次宿主 settings:surface 的生效值。
+ *
+ * 取件、安装、通知与设置页表单回填全部经这一个出口,两个表面读到的是同一份配置;
+ * 插件侧的设置面只读,宿主也不告诉插件「这个字段是否被用户覆盖过」,
+ * 因此优先级只能按可写侧在前来定,取舍理由写在 settings-page.ts 的文件头。
+ */
+const currentSettingValues = (): Record<string, PluginSettingValue> | null =>
+  mergeSourceValues(savedSourceValues, marketSettingsValues())
 
 /* ---------- 资产市场 slot(ui:slot):登记、动作分发与目录短缓存 ---------- */
 
@@ -235,6 +263,75 @@ const persistRewriteSwitch = (enabled: boolean): boolean => {
   }
 }
 
+/**
+ * 从插件存储读取设置页保存的来源配置。
+ * 读不到(未激活、键缺失、形状或版本不符)或读失败都按「没有保存值」处理,
+ * 来源解析回落到宿主设置值,不阻断激活。
+ */
+const loadSavedSourceValues = (): void => {
+  savedSourceValues = null
+  const target = storage
+  if (target === null) return
+  try {
+    savedSourceValues = readAssetSourcesRecord(target.get(SETTINGS_PAGE_STORAGE_KEY))
+  } catch (error) {
+    log('读取设置页保存的来源配置失败,按宿主设置值处理: ' + describeError(error))
+  }
+}
+
+/**
+ * 把设置页的保存值写回插件存储;写失败只记日志,本次会话内仍然生效
+ * (与人性化开关同一口径)。返回是否写入成功,供日志区分两种情形。
+ */
+const persistSourceValues = (values: Record<string, PluginSettingValue>): boolean => {
+  const target = storage
+  if (target === null) return false
+  try {
+    target.set(SETTINGS_PAGE_STORAGE_KEY, createAssetSourcesRecord(values))
+    return true
+  } catch (error) {
+    log('设置页的来源配置写入失败(本次会话内仍生效): ' + describeError(error))
+    return false
+  }
+}
+
+/**
+ * settings.page 的动作:保存来源配置。
+ *
+ * 表单草稿不落盘是引擎口径(宿主只在动作回调里带上草稿),所以「保存」只能是插件自己的动作:
+ * 把草稿收敛成设置字段的值,与已有保存值合并后写入插件存储,下一次取件即按新来源解析。
+ *
+ * 两件配套的事:
+ * - 清掉资产市场标签里同字段的旧草稿:两个表面是同一份字段,设置页的保存是更晚的一次完整提交,
+ *   旧草稿不再代表用户意图,留着会让刚保存的值在取件时被草稿盖住;
+ * - 清空目录短缓存:来源范围可能变了(新增自建来源、关掉内置来源),下一次取件按新来源重新取件。
+ *
+ * 返回刷新指示,宿主重新索取本页模型,表单字段的默认值随新的生效值回填。
+ */
+const saveSourcesFromSettingsPage = (
+  form: Record<string, unknown> | undefined,
+): PluginSlotActionResponse => {
+  const values = readSourcesFormValues(form)
+  if (values === null) {
+    log('设置页的保存动作没有带可用的表单值,未写入')
+    return { refresh: true }
+  }
+  savedSourceValues = { ...(savedSourceValues ?? {}), ...values }
+  const persisted = persistSourceValues(savedSourceValues)
+  if (pageFormOverride !== null) {
+    pageFormOverride = null
+    log('设置页已保存,资产市场标签里的来源草稿一并失效')
+  }
+  pageCatalogCache.clear()
+  syncAssetNotice()
+  log(
+    '已保存来源配置' +
+      (persisted ? ',已写入插件设置' : ',写入插件设置失败,本次会话内仍生效') +
+      ',下一次取件生效: ' + Object.keys(values).join(', '),
+  )
+  return { refresh: true }
+}
+
 /** 登记一次槽位描述;宿主没有 ui:slot 或登记被拒时只记日志,不阻断激活 */
 const registerSlotSafely = (
   slot: PluginSlotName,
@@ -301,7 +398,7 @@ const toggleRewriteSwitch = (): void => {
  * 资产市场标签里的逐行说明承担,不升级成全局通知。
  */
 const readSourceReachability = (): AssetSourceReachability => {
-  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+  const { sources } = resolveMarketSources(pageFormOverride ?? currentSettingValues())
   let enabled = 0
   let reached = 0
   let failed = 0
@@ -532,7 +629,7 @@ export type MarketCatalogResult = CatalogResult
  * 不发任何请求;通道存在时单次取件的限流与三态口径由宿主落实。
  */
 export const fetchMarketCatalog = async (sourceId?: string): Promise<MarketCatalogResult> => {
-  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+  const { sources } = resolveMarketSources(pageFormOverride ?? currentSettingValues())
   const source =
     sourceId === undefined
       ? sources.find((item) => item.enabled) ?? null
@@ -710,7 +807,7 @@ const refreshPageCatalog = (force = false): Promise<void> => {
   if (pagePullInFlight !== null) return pagePullInFlight
   const run = async (): Promise<void> => {
     try {
-      const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+      const { sources } = resolveMarketSources(pageFormOverride ?? currentSettingValues())
       for (const source of sources) {
         if (!source.enabled) {
           pageCatalogCache.delete(source.id)
@@ -738,7 +835,7 @@ const refreshPageCatalog = (force = false): Promise<void> => {
  * 需要补取件时发起单飞任务,取件完成后等宿主下一次索取模型或刷新指示。
  */
 const buildPageModelNow = (): PluginSlotPageModel => {
-  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+  const { sources } = resolveMarketSources(pageFormOverride ?? currentSettingValues())
   const results: MarketPageSourceResult[] = []
   let needsPull = false
   for (const source of sources) {
@@ -769,11 +866,18 @@ const buildPageModelNow = (): PluginSlotPageModel => {
 }
 
 /**
- * ui:slot-data 挂载点:只回答资产市场这一条目,其他条目回落到登记时的缺省模型。
+ * ui:slot-data 挂载点:回答资产市场标签与资产来源设置页两个页面,其他条目回落到登记时的缺省模型。
  * 数据处理器同步返回描述;宿主按 (slot, id) 定位条目,描述渲染的挂载点
  * 恒为登记时的 slot,不存在跨挂载点漂移。
+ *
+ * 设置页每次索取模型都按当前生效值回填表单字段的默认值:打开设置页看到的就是
+ * 正在生效的配置,保存后宿主重新索取时也按新值回填。
  */
 const pageDataHandler: PluginSlotDataHandler = (slot, id) => {
+  if (slot === SETTINGS_PAGE_SLOT) {
+    if (id !== SETTINGS_PAGE_ID) return null
+    return { slot: SETTINGS_PAGE_SLOT, ...buildSettingsPageDescriptor(slotLocale, currentSettingValues()) }
+  }
   if (slot !== MARKET_SLOT || id !== MARKET_SLOT_ID) return null
   return buildPageModelNow()
 }
@@ -831,7 +935,8 @@ const pageActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionRe
  * ui:slot-action 挂载点:按载荷的 slot 分流。
  *
  * 引擎对每个插件只保留一份动作回调,载荷一定带 slot(同一份回调服务全部已登记槽位):
- * composer.toolbar 的按钮翻转「资产改写」开关,conversation.tabs 的动作交给市场页处理。
+ * composer.toolbar 的按钮翻转「资产改写」开关,settings.page 的保存动作写入来源配置,
+ * conversation.tabs 的动作交给市场页处理。
  * 工具条没有页面模型,翻转后返回 undefined(刷新指示对位置型槽位没有意义),
  * 按钮文案靠重新登记刷新。
  */
@@ -840,6 +945,10 @@ const slotActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionRe
     if (payload.id !== REWRITE_BUTTON_ID || payload.actionId !== REWRITE_ACTION_KEY) return undefined
     toggleRewriteSwitch()
     return undefined
+  }
+  if (payload.slot === SETTINGS_PAGE_SLOT) {
+    if (payload.id !== SETTINGS_PAGE_ID || payload.actionId !== SAVE_SOURCES_ACTION_KEY) return undefined
+    return saveSourcesFromSettingsPage(payload.form)
   }
   return pageActionHandler(payload)
 }
@@ -887,8 +996,9 @@ export const activate = async (context: PluginContext): Promise<void> => {
     log('登记资产市场设置字段失败,来源开关按缺省处理: ' + describeError(error))
   }
 
-  // 三处 ui:slot 落点:资产市场标签(conversation.tabs)、人性化按钮(composer.toolbar)、
-  // 资产状态通知(overlay.notice);宿主没有 ui:slot 能力时全部跳过,不阻断激活
+  // 四处 ui:slot 落点:资产市场标签(conversation.tabs)、资产来源设置页(settings.page)、
+  // 人性化按钮(composer.toolbar)与资产状态通知(overlay.notice);
+  // 宿主没有 ui:slot 能力时全部跳过,不阻断激活
   notifier = (key, params) => context.ui.notify(key, params)
   hostUi = context.ui
   // 标题与按钮文案共用一份语言判定,两侧不漂移
@@ -896,6 +1006,8 @@ export const activate = async (context: PluginContext): Promise<void> => {
 
   // 资产改写开关:从插件存储读取,键独立于快照与市场记录;缺省开启
   loadRewriteSwitch()
+  // 设置页保存的来源配置:同样从插件存储读取,键独立于开关与安装记录
+  loadSavedSourceValues()
 
   try {
     if (typeof context.ui.registerSlot === 'function') {
@@ -910,6 +1022,22 @@ export const activate = async (context: PluginContext): Promise<void> => {
     log('登记资产市场 slot 失败,标签不可用但不阻断激活: ' + describeError(error))
   }
 
+  // 资产来源设置页:设置 → 插件 → 资产来源。表单字段与 settings:surface 同源,
+  // 「保存来源配置」动作写入插件设置,下一次取件生效;登记时的缺省模型按当前生效值回填。
+  try {
+    if (typeof context.ui.registerSlot === 'function') {
+      context.ui.registerSlot(
+        SETTINGS_PAGE_SLOT,
+        buildSettingsPageDescriptor(slotLocale, currentSettingValues()),
+      )
+      log('已登记资产来源设置页(' + SETTINGS_PAGE_SLOT + '): ' + SETTINGS_PAGE_ID)
+    } else {
+      log('宿主没有 ui:slot 能力,资产来源设置页不可用')
+    }
+  } catch (error) {
+    log('登记资产来源设置页失败,设置入口不可用但不阻断激活: ' + describeError(error))
+  }
+
   // 人性化按钮:文案带开关状态,切换后按同 id 重新登记刷新
   if (typeof context.ui.registerSlot === 'function') {
     registerRewriteButton()
@@ -918,14 +1046,16 @@ export const activate = async (context: PluginContext): Promise<void> => {
   try {
     // 引擎对每个插件只保留一份动作回调与一份数据处理器(后登记者替换前一份),
     // 但登记入口按槽位授权;这里逐个已用槽位登记同一份回调,载荷的 slot 负责分流。
-    // 位置型槽位没有页面模型,只有 conversation.tabs 需要数据处理器。
+    // 位置型槽位没有页面模型,页面型槽位(conversation.tabs 与 settings.page)才需要数据处理器。
     if (typeof context.ui.onSlotAction === 'function') {
-      for (const slot of [MARKET_SLOT, REWRITE_SWITCH_SLOT] as const) {
+      for (const slot of [MARKET_SLOT, SETTINGS_PAGE_SLOT, REWRITE_SWITCH_SLOT] as const) {
         context.ui.onSlotAction(slot, slotActionHandler)
       }
     }
     if (typeof context.ui.onSlotData === 'function') {
-      context.ui.onSlotData(MARKET_SLOT, pageDataHandler)
+      for (const slot of [MARKET_SLOT, SETTINGS_PAGE_SLOT] as const) {
+        context.ui.onSlotData(slot, pageDataHandler)
+      }
     }
   } catch (error) {
     log('登记 slot 动作或数据挂载点失败,条目静态显示: ' + describeError(error))
@@ -990,6 +1120,7 @@ export const deactivate = (): void => {
   pagePullInFlight = null
   pageItemEntries = []
   pageFormOverride = null
+  savedSourceValues = null
   pageInstaller = null
   pageClock = () => Date.now()
   slotLocale = 'zh-CN'

@@ -31,6 +31,7 @@ import {
   REWRITE_TOGGLE_NOTICE_KEY,
 } from '../../src/slots/rewrite-switch.ts'
 import { MARKET_SLOT, MARKET_SLOT_ID, REFRESH_ACTION_KEY } from '../../src/market/page.ts'
+import { SETTINGS_PAGE_SLOT } from '../../src/slots/settings-page.ts'
 import { manifest } from '../../src/manifest.ts'
 import type { AssetContents } from '../../src/humanize/types.ts'
 import type {
@@ -255,8 +256,8 @@ const reset = (): void => {
   setActiveContents({})
 }
 
-test('manifest: slots 白名单声明三个槽位', () => {
-  assert.deepEqual(manifest.slots, [MARKET_SLOT, REWRITE_SWITCH_SLOT, ASSET_NOTICE_SLOT])
+test('manifest: slots 白名单声明四个槽位', () => {
+  assert.deepEqual(manifest.slots, [MARKET_SLOT, SETTINGS_PAGE_SLOT, REWRITE_SWITCH_SLOT, ASSET_NOTICE_SLOT])
 })
 
 test('activate: 登记人性化按钮(文案含状态)与空资产包的常驻通知', async () => {
