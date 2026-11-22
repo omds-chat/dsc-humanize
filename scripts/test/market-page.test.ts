@@ -16,7 +16,8 @@ import type {
   PluginSlotActionHandler,
   PluginSlotActionResponse,
   PluginSlotDataHandler,
-  PluginSlotDescriptor,
+  PluginSlotDescriptorBody,
+  PluginSlotName,
   PluginSettingDescriptor,
   PluginSettingValue,
 } from '../../src/types.ts'
@@ -149,8 +150,8 @@ const awesomeIndex = JSON.stringify([
 
 /** registerSlot 的一次登记记录;slot 与描述成对保留,供一致性断言使用 */
 interface SlotRegistration {
-  slot: string
-  descriptor: PluginSlotDescriptor
+  slot: PluginSlotName
+  descriptor: PluginSlotDescriptorBody
 }
 
 interface FakeContext {
@@ -193,15 +194,15 @@ const createFakeContext = (table: Map<string, string | number | null>): FakeCont
       notify: (key, params) => {
         notices.push({ key, ...(params === undefined ? {} : { params }) })
       },
-      registerSlot: (slot: string, descriptor: PluginSlotDescriptor) => {
+      registerSlot: (slot, descriptor) => {
         slotRegistrations.push({ slot, descriptor })
-        return { id: descriptor.id, dispose: () => undefined }
+        return { slot, id: descriptor.id, dispose: () => undefined }
       },
-      onSlotAction: (handler) => {
+      onSlotAction: (_slot, handler) => {
         actionHandlers.push(handler)
         return () => undefined
       },
-      onSlotData: (handler) => {
+      onSlotData: (_slot, handler) => {
         dataHandlers.push(handler)
         return () => undefined
       },
@@ -270,15 +271,17 @@ test('activate: 登记 ui:slot 条目、动作与数据挂载点,descriptor 的 
   const fake = createFakeContext(happyTable())
   await activate(fake.context)
 
-  assert.equal(fake.slotRegistrations.length, 1)
-  // descriptor 的 slot 与登记时一致:登记到 conversation.tabs,条目 id 用 asset-market
-  assert.equal(fake.slotRegistrations[0]?.slot, MARKET_SLOT)
-  assert.equal(fake.slotRegistrations[0]?.descriptor.id, MARKET_SLOT_ID)
+  // 本插件登记三处落点:资产市场标签、人性化按钮、资产状态通知;这里只断言市场这条
+  const market = fake.slotRegistrations.find((entry) => entry.slot === MARKET_SLOT)
+  assert.ok(market !== undefined)
+  assert.equal(market.descriptor.id, MARKET_SLOT_ID)
   // 标题成对登记(沿用设置字段标签的词条做法),order 按标签栏排期约定取 50
-  assert.equal(fake.slotRegistrations[0]?.descriptor.title, MARKET_SLOT_LABELS['zh-CN'])
+  assert.equal('title' in market.descriptor ? market.descriptor.title : undefined, MARKET_SLOT_LABELS['zh-CN'])
   assert.equal(MARKET_SLOT_LABELS['en-US'], 'Asset market')
-  assert.equal(fake.slotRegistrations[0]?.descriptor.order, 50)
-  assert.equal(fake.actionHandlers.length, 1)
+  assert.equal(market.descriptor.order, 50)
+  // 动作回调按槽位各登记一份(引擎按插件只保留最后一份,载荷 slot 分流);
+  // 数据处理器只有页面型槽位需要
+  assert.equal(fake.actionHandlers.length, 2)
   assert.equal(fake.dataHandlers.length, 1)
   assert.ok(fake.logs.some((line) => line.includes('已登记资产市场 slot')))
   // 两个挂载点各自占用一个 ui:slot 登记名额(引擎限流 20 次 / 10 秒)
@@ -290,6 +293,8 @@ test('activate: 登记 ui:slot 条目、动作与数据挂载点,descriptor 的 
   const model = data(MARKET_SLOT, MARKET_SLOT_ID)
   assert.ok(model !== null)
   assert.equal(model.id, MARKET_SLOT_ID)
+  // 回流模型带槽位头,宿主才按 (slot, id) 认可这份模型
+  assert.equal(model.slot, MARKET_SLOT)
   assert.equal(data('nav.panel', MARKET_SLOT_ID), null)
   assert.equal(data(MARKET_SLOT, 'other-entry'), null)
 })

@@ -22,6 +22,20 @@ import {
 import type { MarketSlotLocale, MarketPageEntry, MarketPageSourceResult } from './market/page.js'
 import { createHostAssetTransport, pickHostAssets } from './market/transport.js'
 import { manifest } from './manifest.js'
+import { buildAssetNotice } from './slots/asset-notice.js'
+import type { AssetSourceReachability } from './slots/asset-notice.js'
+import {
+  buildRewriteButtonDescriptor,
+  createRewriteSwitchRecord,
+  readRewriteSwitch,
+  REWRITE_ACTION_KEY,
+  REWRITE_BUTTON_ID,
+  REWRITE_SWITCH_DEFAULT,
+  REWRITE_SWITCH_SLOT,
+  REWRITE_SWITCH_STORAGE_KEY,
+  REWRITE_TOGGLE_NOTICE_KEY,
+  rewriteToggleNoticeParams,
+} from './slots/rewrite-switch.js'
 import { describeTrustVerdict, verifySourceTrust } from './trust/source-verdict.js'
 import type { AssetTrustVerdict } from './trust/source-verdict.js'
 import type {
@@ -29,7 +43,10 @@ import type {
   PluginSlotActionPayload,
   PluginSlotActionResponse,
   PluginSlotDataHandler,
-  PluginSlotDescriptor,
+  PluginSlotDescriptorBody,
+  PluginSlotHandle,
+  PluginSlotName,
+  PluginSlotPageModel,
   PluginSettingValue,
 } from './types.js'
 
@@ -162,6 +179,184 @@ const resolveSlotLocale = async (context: PluginContext): Promise<MarketSlotLoca
     return (await context.settings.locale()) === 'en-US' ? 'en-US' : 'zh-CN'
   } catch {
     return 'zh-CN'
+  }
+}
+
+/* ---------- 槽位:人性化按钮(composer.toolbar)与资产状态通知(overlay.notice) ---------- */
+
+/** 激活时拿到的 ui 出口;未激活时为 null,槽位登记与撤销都经它转出 */
+let hostUi: PluginContext['ui'] | null = null
+
+/**
+ * 「是否启用资产改写」的当前值。
+ * 激活时从插件存储读取(键独立于快照与市场记录),切换时写回;
+ * 关闭时请求前处理器直接返回 null,请求保持原样。
+ */
+let rewriteEnabled = REWRITE_SWITCH_DEFAULT
+
+/** composer.toolbar 的登记句柄;每次切换后重新登记(同 id 替换),这里只留最新一份 */
+let rewriteButtonHandle: PluginSlotHandle | null = null
+
+/** overlay.notice 的登记句柄;为 null 表示当前没有登记、界面上没有通知卡片 */
+let assetNoticeHandle: PluginSlotHandle | null = null
+
+/** 当前已登记通知的正文;正文不变就不重新登记,免得每次取件都扰动界面 */
+let assetNoticeSignature: string | null = null
+
+/**
+ * 从插件存储读取「资产改写」开关。
+ * 读不到(未激活、键缺失)或读失败都落到缺省值(开启),不阻断激活;
+ * 记录形状由 readRewriteSwitch 收敛,版本不符按缺省处理。
+ */
+const loadRewriteSwitch = (): void => {
+  rewriteEnabled = REWRITE_SWITCH_DEFAULT
+  const target = storage
+  if (target === null) return
+  try {
+    rewriteEnabled = readRewriteSwitch(target.get(REWRITE_SWITCH_STORAGE_KEY))
+  } catch (error) {
+    log('读取资产改写开关失败,按缺省(开启)处理: ' + describeError(error))
+  }
+}
+
+/**
+ * 把开关写回插件存储;写失败只记日志,本次会话内仍然生效。
+ * 返回是否写入成功,供日志区分两种情形。
+ */
+const persistRewriteSwitch = (enabled: boolean): boolean => {
+  const target = storage
+  if (target === null) return false
+  try {
+    target.set(REWRITE_SWITCH_STORAGE_KEY, createRewriteSwitchRecord(enabled))
+    return true
+  } catch (error) {
+    log('资产改写开关写入失败(本次会话内仍生效): ' + describeError(error))
+    return false
+  }
+}
+
+/** 登记一次槽位描述;宿主没有 ui:slot 或登记被拒时只记日志,不阻断激活 */
+const registerSlotSafely = (
+  slot: PluginSlotName,
+  descriptor: PluginSlotDescriptorBody,
+  failure: string,
+): PluginSlotHandle | null => {
+  const ui = hostUi
+  if (ui === null || typeof ui.registerSlot !== 'function') return null
+  try {
+    return ui.registerSlot(slot, descriptor)
+  } catch (error) {
+    log(failure + ': ' + describeError(error))
+    return null
+  }
+}
+
+/**
+ * 登记工具条按钮(文案里带开关状态:开 / 关)。
+ * 切换开关后再调一次:宿主对同插件同 id 是替换语义,界面据此刷新按钮文字;
+ * 工具条没有页面模型,不需要刷新指示。
+ */
+const registerRewriteButton = (): void => {
+  const handle = registerSlotSafely(
+    REWRITE_SWITCH_SLOT,
+    buildRewriteButtonDescriptor(slotLocale, rewriteEnabled),
+    '登记人性化按钮失败,工具条按钮不可用',
+  )
+  if (handle === null) return
+  // 只在首次登记时记一行;切换后的重新登记是常态,不必每次刷日志
+  if (rewriteButtonHandle === null) {
+    log(
+      '已登记人性化按钮(' + REWRITE_SWITCH_SLOT + '): ' + REWRITE_BUTTON_ID +
+        ',当前' + (rewriteEnabled ? '开启' : '关闭'),
+    )
+  }
+  rewriteButtonHandle = handle
+}
+
+/**
+ * 一次「人性化」点击:翻转开关 → 落盘 → 重新登记按钮刷新状态 → 一次气泡说明当前状态。
+ * 气泡用宿主文案键(带 {state} 参数),不弹窗、不遮罩;
+ * 宿主字典缺该键时按 i18n 的缺键口径显示键名,状态本身不受影响。
+ */
+const toggleRewriteSwitch = (): void => {
+  rewriteEnabled = !rewriteEnabled
+  const persisted = persistRewriteSwitch(rewriteEnabled)
+  registerRewriteButton()
+  // 气泡失败(宿主 notify 限流 10 次 / 10 秒、或宿主没有该能力)不影响已经生效的开关
+  try {
+    notifier?.(REWRITE_TOGGLE_NOTICE_KEY, rewriteToggleNoticeParams(slotLocale, rewriteEnabled))
+  } catch (error) {
+    log('改写状态气泡发送失败,开关已生效: ' + describeError(error))
+  }
+  log(
+    '资产改写已' + (rewriteEnabled ? '开启' : '关闭') +
+      (persisted ? ',已写入插件存储' : ',写入插件存储失败,本次会话内仍生效'),
+  )
+}
+
+/**
+ * 已启用来源的可达性。
+ * 只有真的取了件、且全部失败才算不可达(取件通道缺失同样算):没有取件结论时返回 unknown,
+ * 免得插件刚激活就把「还没开始」报成失败;任一来源取件成功即算可达,单来源失败由
+ * 资产市场标签里的逐行说明承担,不升级成全局通知。
+ */
+const readSourceReachability = (): AssetSourceReachability => {
+  const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
+  let enabled = 0
+  let reached = 0
+  let failed = 0
+  let reason = ''
+  for (const source of sources) {
+    if (!source.enabled) continue
+    enabled += 1
+    const cached = pageCatalogCache.get(source.id)
+    if (cached === undefined) continue
+    if (cached.result.ok) {
+      reached += 1
+      continue
+    }
+    failed += 1
+    if (reason === '') {
+      reason = cached.result.error.code + ': ' + cached.result.error.message
+    }
+  }
+  if (reached > 0) return { status: 'reachable' }
+  if (enabled === 0) return { status: 'unreachable', reason: '没有已启用的资产来源' }
+  if (marketTransport === null) return { status: 'unreachable', reason: '宿主未提供 assets:read 读取通道' }
+  if (failed > 0) return { status: 'unreachable', reason }
+  return { status: 'unknown' }
+}
+
+/**
+ * 同步 overlay.notice 的常驻通知:有问题就登记并刷新正文,问题消失就撤销登记。
+ *
+ * 只在事实变化时动手:正文相同则不重新登记,避免每次取件都重新登记一次
+ * (ui:slot 的登记次数计入 20 次 / 10 秒的限流,重复登记也让界面空转)。
+ * 通知只说明原因,不改请求、不阻断安装。
+ */
+const syncAssetNotice = (): void => {
+  // 未激活时不登记:停用后仍在收尾的取件任务不应把通知卡片重新登记回来
+  if (!active) return
+  const descriptor = buildAssetNotice({
+    contents: activeContents,
+    sources: readSourceReachability(),
+    locale: slotLocale,
+  })
+  if (descriptor === null) {
+    if (assetNoticeHandle !== null) {
+      assetNoticeHandle.dispose()
+      assetNoticeHandle = null
+      log('资产来源与资产包都可用,已撤销资产状态通知')
+    }
+    assetNoticeSignature = null
+    return
+  }
+  if ((descriptor.text ?? null) === assetNoticeSignature) return
+  const handle = registerSlotSafely('overlay.notice', descriptor, '登记资产状态通知失败,通知卡片不可用')
+  if (handle !== null) {
+    assetNoticeHandle = handle
+    assetNoticeSignature = descriptor.text ?? null
+    log('已登记资产状态通知: ' + (descriptor.text ?? ''))
   }
 }
 
@@ -303,6 +498,8 @@ export const importAssetPackage = async (
   log('导入资产包 ' + asset.source.id + ',来源结论: ' + describeTrustVerdict(trust))
 
   setActiveContents(asset.contents)
+  // 装配内容变了:资产包从「空」变成「可用」时撤销常驻通知,后续仍按实际情况重新评估
+  syncAssetNotice()
 
   if (!active || snapshotStore === null) {
     log('导入资产包 ' + asset.source.id + ',当前未激活或 IndexedDB 不可用,只装配到内存')
@@ -527,6 +724,8 @@ const refreshPageCatalog = (force = false): Promise<void> => {
       log('目录刷新失败,保持已有缓存: ' + describeError(error))
     } finally {
       pagePullInFlight = null
+      // 取件结论变了:来源由不可达转为可达(或反之)时,常驻通知随之撤销或登记
+      syncAssetNotice()
     }
   }
   pagePullInFlight = run()
@@ -538,7 +737,7 @@ const refreshPageCatalog = (force = false): Promise<void> => {
  * 缓存缺失的来源给「读取中」占位,缓存过期的来源在后台补取件、本次先显示旧结果;
  * 需要补取件时发起单飞任务,取件完成后等宿主下一次索取模型或刷新指示。
  */
-const buildPageModelNow = (): PluginSlotDescriptor => {
+const buildPageModelNow = (): PluginSlotPageModel => {
   const { sources } = resolveMarketSources(pageFormOverride ?? marketSettingsValues())
   const results: MarketPageSourceResult[] = []
   let needsPull = false
@@ -565,7 +764,8 @@ const buildPageModelNow = (): PluginSlotDescriptor => {
   if (model.truncated) {
     log('目录超过宿主描述的体积上限,已从尾部收敛条目: ' + MARKET_SLOT_ID)
   }
-  return model.descriptor
+  // 回流模型带槽位头:宿主按 (slot, id) 校验一致性,缺 slot 的模型会被拒绝并回落到登记时的缺省模型
+  return { slot: MARKET_SLOT, ...model.descriptor }
 }
 
 /**
@@ -609,6 +809,7 @@ const pageActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionRe
   if (formValues !== null) {
     pageFormOverride = formValues
     log('表单草稿已生效(本会话内覆盖设置值参与来源解析,不落盘)')
+    syncAssetNotice()
   }
   if (payload.actionId === REFRESH_ACTION_KEY) {
     void refreshPageCatalog(true)
@@ -624,6 +825,23 @@ const pageActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionRe
     return undefined
   }
   return undefined
+}
+
+/**
+ * ui:slot-action 挂载点:按载荷的 slot 分流。
+ *
+ * 引擎对每个插件只保留一份动作回调,载荷一定带 slot(同一份回调服务全部已登记槽位):
+ * composer.toolbar 的按钮翻转「资产改写」开关,conversation.tabs 的动作交给市场页处理。
+ * 工具条没有页面模型,翻转后返回 undefined(刷新指示对位置型槽位没有意义),
+ * 按钮文案靠重新登记刷新。
+ */
+const slotActionHandler = (payload: PluginSlotActionPayload): PluginSlotActionResponse | undefined => {
+  if (payload.slot === REWRITE_SWITCH_SLOT) {
+    if (payload.id !== REWRITE_BUTTON_ID || payload.actionId !== REWRITE_ACTION_KEY) return undefined
+    toggleRewriteSwitch()
+    return undefined
+  }
+  return pageActionHandler(payload)
 }
 
 /**
@@ -669,13 +887,20 @@ export const activate = async (context: PluginContext): Promise<void> => {
     log('登记资产市场设置字段失败,来源开关按缺省处理: ' + describeError(error))
   }
 
-  // 资产市场 slot:登记会话视图标签栏条目与动作、数据两个挂载点;宿主没有 ui:slot 能力时跳过,不阻断激活
+  // 三处 ui:slot 落点:资产市场标签(conversation.tabs)、人性化按钮(composer.toolbar)、
+  // 资产状态通知(overlay.notice);宿主没有 ui:slot 能力时全部跳过,不阻断激活
   notifier = (key, params) => context.ui.notify(key, params)
+  hostUi = context.ui
+  // 标题与按钮文案共用一份语言判定,两侧不漂移
+  slotLocale = await resolveSlotLocale(context)
+
+  // 资产改写开关:从插件存储读取,键独立于快照与市场记录;缺省开启
+  loadRewriteSwitch()
+
   try {
     if (typeof context.ui.registerSlot === 'function') {
       // 登记时的缺省模型:目录尚无缓存,列表为空;宿主索取模型时由数据挂载点补全。
       // 标题按宿主语言取成对词条的一侧,order 按标签栏的排期约定取 50。
-      slotLocale = await resolveSlotLocale(context)
       context.ui.registerSlot(MARKET_SLOT, buildMarketPageModel([], slotLocale).descriptor)
       log('已登记资产市场 slot(' + MARKET_SLOT + '): ' + MARKET_SLOT_ID)
     } else {
@@ -684,12 +909,23 @@ export const activate = async (context: PluginContext): Promise<void> => {
   } catch (error) {
     log('登记资产市场 slot 失败,标签不可用但不阻断激活: ' + describeError(error))
   }
+
+  // 人性化按钮:文案带开关状态,切换后按同 id 重新登记刷新
+  if (typeof context.ui.registerSlot === 'function') {
+    registerRewriteButton()
+  }
+
   try {
+    // 引擎对每个插件只保留一份动作回调与一份数据处理器(后登记者替换前一份),
+    // 但登记入口按槽位授权;这里逐个已用槽位登记同一份回调,载荷的 slot 负责分流。
+    // 位置型槽位没有页面模型,只有 conversation.tabs 需要数据处理器。
     if (typeof context.ui.onSlotAction === 'function') {
-      context.ui.onSlotAction(pageActionHandler)
+      for (const slot of [MARKET_SLOT, REWRITE_SWITCH_SLOT] as const) {
+        context.ui.onSlotAction(slot, slotActionHandler)
+      }
     }
     if (typeof context.ui.onSlotData === 'function') {
-      context.ui.onSlotData(pageDataHandler)
+      context.ui.onSlotData(MARKET_SLOT, pageDataHandler)
     }
   } catch (error) {
     log('登记 slot 动作或数据挂载点失败,条目静态显示: ' + describeError(error))
@@ -707,6 +943,9 @@ export const activate = async (context: PluginContext): Promise<void> => {
     log('读取当前使用快照失败,保持空内容: ' + describeError(error))
   }
 
+  // 装配结果确定后再评估常驻通知:空包或来源不可达才登记,正常时不登记
+  syncAssetNotice()
+
   releaseSessionSubscription = context.events.on('session:changed', (event) => {
     context.log(manifest.id + ': session:changed -> ' + String(event.activeId ?? 'none'))
   })
@@ -714,6 +953,8 @@ export const activate = async (context: PluginContext): Promise<void> => {
   releaseRequestHandler = context.chat.onBeforeRequest(
     createBeforeRequestHandler({
       contents: () => activeContents,
+      // 开关关闭时请求前处理器直接返回 null,请求保持原样
+      enabled: () => rewriteEnabled,
       log: (message) => context.log(manifest.id + ': ' + message),
     }),
   )
@@ -752,5 +993,12 @@ export const deactivate = (): void => {
   pageInstaller = null
   pageClock = () => Date.now()
   slotLocale = 'zh-CN'
+  // 槽位登记与挂载点的释放函数由引擎执行,这里只丢弃句柄与本地状态;
+  // 开关回到缺省值,下一次激活以插件存储为准
+  hostUi = null
+  rewriteEnabled = REWRITE_SWITCH_DEFAULT
+  rewriteButtonHandle = null
+  assetNoticeHandle = null
+  assetNoticeSignature = null
   active = false
 }

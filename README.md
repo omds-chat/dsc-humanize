@@ -22,8 +22,9 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 一条根证书内嵌与链校验链路:构建时读取 `certs/dsc-humanize/dsc-humanize-root-ca.crt`,把 PEM 注入为产物常量,运行时导出 `EMBEDDED_ROOT_CA_PEM`;`importAssetPackage` 带来源证书时先用它做「根 → EEC」两级链校验,按两轴结论(签名结论 + 来源结论)降级来源结论、不阻断导入
 - 一条资产市场逻辑层(按 [docs/design/asset-market.md](docs/design/asset-market.md)):清单申请 `assets:read` 与 `settings:surface`;激活时把 `context.assets.readText` 包装成内核 transport 注入(三态透传:content 取件成功、status 按 3.x 口径降级、no-status 与通道拒绝按 transport-failed,未获能力或宿主无 assets 成员时保持 transport-missing,本地资产不受影响);内置两条来源(组织预设与社区合集,base_url 列表见设计 2.2,本地联调地址由构建注入、非法时退回线上),来源开关与一条自建来源经设置表面字段存储;目录取件按设计 3.1 的目录部分实现(来源元数据 → 合集证书三档 → 内嵌根校链 → assets.json),两种合集元数据形状兼容读取(设计 8.2),结论按 3.4 两轴记录,链校验复用 `verifySourceTrust`;安装入口 `installMarketPackage` 按包层清单逐文件取件并比对 SHA-512,整包校验复用 `importAssetPackage` 的既有原子语义,安装记录含来源标识、base_url 与版本
 - 一块资产市场标签(已按 ui:slot 落地,入口:会话视图标签栏里的资产市场标签;宿主插槽细节以引擎文档为准):清单申请 `ui:slot` 能力,在 `slots` 白名单里声明 `conversation.tabs`,并声明 `ui:slot-action` 与 `ui:slot-data` 挂载点;激活时用 `context.ui.registerSlot` 把「资产市场」条目登记到 `conversation.tabs`(order 50,标题按宿主语言取 zh/en 成对词条的一侧),数据挂载点每次索取模型都按既有 catalog 层补取件并做内存短缓存(5 分钟,「刷新目录」绕过),动作挂载点把「安装」分发到 `installMarketPackage`、把「刷新目录」转成刷新指示;来源不可用时该来源折叠成一行说明,只提示不阻断;详见下文「资产市场」节
+- 两处补充落点(同属 ui:slot,清单 `slots` 白名单一并声明):`composer.toolbar` 的「人性化」开关按钮(文案带开 / 关状态,点击经 `ui:slot-action` 翻转「是否启用资产改写」,开关值存独立存储键 `dsc-humanize/rewrite/v1`,切换后按同 id 重新登记刷新按钮,并用一次气泡说明当前状态;关闭时请求前处理器返回 `null`,请求按原样发出)与 `overlay.notice` 的资产状态通知(资产来源不可达或资产包不可用时登记一条说明原因的常驻通知,问题消失即撤销登记,正常时不注册);详见下文「人性化开关与资产状态通知」节
 - 一份本地回环冒烟脚本:`node --import ./scripts/test/ts-hooks.mjs scripts/smoke-market.mjs` 在 127.0.0.1:61120 与 61121 起两个静态目录(inner 用 indexed 形状与证书第一档,awesome 用 flat 形状与证书第二档),走完整的目录取件、slot 描述生成、动作分发与安装链路;只访问回环地址
-- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分(含排除词、锚定模式与语言判定)、维度合成(同维覆盖、跨维拼接、缺省归 tone、语言维 lang 门)、对比示例读取与注入、资产按类型读取与校验、1.1.0 特性版本门、IndexedDB 快照封装、快照装配与一次性迁移、资产包导入、证书链校验与导入两轴结论、内核装配与请求前接线、市场 slot 描述与动作分发
+- 一套零依赖测试:用 Node 内置的 `node:test` 覆盖分类打分(含排除词、锚定模式与语言判定)、维度合成(同维覆盖、跨维拼接、缺省归 tone、语言维 lang 门)、对比示例读取与注入、资产按类型读取与校验、1.1.0 特性版本门、IndexedDB 快照封装、快照装配与一次性迁移、资产包导入、证书链校验与导入两轴结论、内核装配与请求前接线、市场 slot 描述与动作分发、三处槽位的接线(按钮状态随开关变化、点击后开关落盘、来源不可达时登记通知与恢复后撤销)
 
 内核通过宿主的请求前能力落到请求上:有资产时按策略改写请求参数与系统提示词,没有资产时请求保持原样。插件同时记录会话切换,并在首次激活时用宿主文案键提示一次。
 
@@ -69,6 +70,42 @@ dsc-humanize 是一个 dsc 插件,目的是让 ds-chat 里的助手更接近你�
 - 取件与刷新:数据挂载点每次索取模型都走既有 catalog 层补取件(来源元数据 → 合集证书 → assets.json),目录结果做内存短缓存,时长 5 分钟(对齐设计 8.1 的内存缓存建议);缓存时效内的重复索取不重复取件,以平衡 assets:read 的 20 次 / 10 秒与 settings:surface 的 60 次 / 10 秒预算。宿主索取模型是同步回调,首次进入标签先显示「读取中」占位,取件完成后在下一次索取模型或刷新指示时看到目录。
 - 失败降级:某个来源取件失败(所有地址不可达、通道缺失、索引不可读)时,该来源在目录里折叠成一行说明,徽标标「来源不可用」,其余来源照常列出——遵守「只提示不阻断」;目录条目超过宿主描述的体积上限(8KB)时从尾部收敛条目并补一条截断说明。
 - 安装:动作按条目登记表把 itemKey 还原成来源、作者与包标识,再交给 `installMarketPackage`(与设置页面的来源解析同一条路径,两轴结论每次安装重新计算);成功与失败都用宿主为资产包新增的成对文案键出气泡通知——成功走 `pluginAssetInstalled`(资产包 {id} 安装完成),失败走 `pluginAssetInstallFailed`(资产包 {id} 安装失败:{reason}),不弹窗、不遮罩;旧键 `pluginInstalled` / `pluginInstallRejected` 属于插件安装,不再复用。宿主版本要求:宿主需已提供这对资产专用键(`notify` 只写不读,插件探测不到宿主字典,故不做缺键回落);更早的宿主上气泡取不到文案,安装本身照常完成。
+
+## 人性化开关与资产状态通知
+
+三处槽位(ui:slot)都由插件在激活期登记一份声明式描述,渲染、i18n 与样式全部归宿主;插件不交控件,也不做任何路由、弹窗或遮罩。
+
+| 槽位 | 落点 | 本插件的条目 | 行为 |
+|:---:|:---:|:---:|:---:|
+| `conversation.tabs` | 会话视图标签栏 | `asset-market`(order 50) | 资产市场整页,见上一节 |
+| `composer.toolbar` | 输入框下方工具条 | `rewrite-switch`(order 50) | 「人性化 · 开 / 关」按钮:点击翻转「是否启用资产改写」 |
+| `overlay.notice` | 右上角通知栈 | `asset-state`(order 50,level `warning`) | 只在资产来源不可达或资产包不可用时登记,说明原因 |
+
+### 人性化按钮
+
+| 项 | 内容 |
+|:---:|:---:|
+| 文案 | `人性化 · 开` / `人性化 · 关`(英文 `Humanize · on` / `Humanize · off`)。宿主 `composer.toolbar` 的描述只有一个文案字段,没有独立徽标位,因此状态并入文案:文案在前、状态在后 |
+| 动作 | 点击经 `ui:slot-action` 回到插件,载荷 `slot` 为 `composer.toolbar`、`actionId` 为 `toggle` |
+| 存储 | 开关值存插件存储的独立键 `dsc-humanize/rewrite/v1`,记录形状 `{ version: 1, enabled }`;与快照(IndexedDB,旧键 `dsc-humanize/snapshot/v1` 仅作迁移)和安装记录(`dsc-humanize/market/v1`)分开,三份数据互不影响 |
+| 刷新 | 翻转后按同 id 重新 `registerSlot`:宿主对同插件同 id 是替换语义,按钮文字随之刷新;工具条没有页面模型,不用刷新指示 |
+| 气泡 | 每次点击一次气泡,宿主文案键 `pluginHumanizeRewriteToggled`,参数 `{state}`(`开启` / `关闭`);不弹窗、不遮罩 |
+| 与请求的关系 | 打开(缺省):请求前处理器按既有行为改写请求;关闭:处理器第一句就返回 `null`,连资产内容都不读,请求按原样发出 |
+| 存储读取口径 | 缺键、形状不符或版本不符都回落到缺省(开启),不做部分保留;写失败只记日志,本次会话内仍生效 |
+
+宿主版本要求:宿主字典需提供一条形如「人性化改写已{state}」的键 `pluginHumanizeRewriteToggled`。缺该键时宿主 i18n 的缺键口径是显示键名本身(`notify` 只写不读,插件探测不到字典),状态与改写行为都不受影响。
+
+### 资产状态通知
+
+| 项 | 内容 |
+|:---:|:---:|
+| 何时登记 | 两个真实问题:已启用来源全部取件失败(或宿主没有 `assets:read` 读取通道,或没有已启用的来源);当前装配的资产包不可用(五类条目一条都没有,或内容不完整、缺标签集与策略表,导致改写无法生效) |
+| 何时撤销 | 两个问题都不再成立时撤销该登记;正文变化时按同 id 重新登记,正文不变不重复登记(避免把 `ui:slot` 的登记次数耗在重复刷新上) |
+| 条数 | 只登记一条,把当前所有原因写进同一段正文;宿主按插件把多条通知合并成一张卡片,这里不需要逐条罗列 |
+| 强度 | `warning`:功能暂不可用,插件本身没坏(不用 `error`) |
+| 正文 | 直给文案(`text`)不走宿主文案键:原因里带错误码与可读摘要,键承载不了;按宿主 2000 字符上限收敛 |
+| 不误报 | 「还没有取件结论」不算不可达:只有真的取了且全失败才登记;任一来源成功即视为可达,单来源失败由资产市场标签里的逐行说明承担 |
+| 与请求的关系 | 只说明原因,不改请求、不阻断安装:改写是否生效仍由开关与资产内容决定 |
 
 ## 规范与 Schema
 
@@ -126,6 +163,7 @@ dsc-humanize/
 │   │   ├── market-sources.test.ts # 市场来源:地址判定、注入回退、设置开关
 │   │   ├── market-transport.test.ts # assets:read 三态映射与通道注入
 │   │   ├── rule-classifier.test.ts
+│   │   ├── slots.test.ts      # 三处槽位:按钮状态、开关落盘与资产状态通知
 │   │   ├── snapshot-db.test.ts # IndexedDB 快照封装
 │   │   ├── strategy-engine.test.ts
 │   │   └── trust-chain.test.ts # 证书链校验与导入两轴结论
@@ -155,6 +193,9 @@ dsc-humanize/
 │   │   ├── catalog.ts        # 目录取件:来源元数据、证书三档、链校验、assets.json
 │   │   ├── install.ts        # 安装取件:包层清单逐文件、SHA-512 比对、扁平化
 │   │   └── page.ts           # ui:slot 描述模型:目录条目、来源表单、动作键与截断收敛
+│   ├── slots/                # 两处补充槽位的描述模型
+│   │   ├── rewrite-switch.ts # 人性化开关:存储键、读取口径与工具条按钮描述
+│   │   └── asset-notice.ts   # 资产状态通知:登记条件、正文口径与来源可达性结论
 │   └── humanize/             # 内核骨架,不接宿主
 │       ├── index.ts          # 内核对外出口
 │       ├── kernel.ts         # 内核装配:分类 -> 策略 -> 注入
@@ -181,12 +222,13 @@ dsc-humanize/
 | `src/manifest.ts` | 插件运行时清单,产物继续导出 |
 | `src/host/` | 宿主请求接线与资产交付:申请 `chat:request` 把内核结果映射成宿主补丁;读取当前使用快照 |
 | `src/market/` | 资产市场逻辑层与 slot 描述构建:assets:read 三态映射、来源模型、目录取件、安装取件与 ui:slot 描述构建 |
+| `src/slots/` | 两处补充槽位的描述模型:人性化开关(存储键、读取口径、按钮文案与气泡参数)与资产状态通知(登记条件、正文口径、资产包可用性判断) |
 | `src/trust/` | 内嵌的资产根证书常量与来源证书链校验:零依赖 DER 解析、WebCrypto 验签与导入两轴结论 |
 | `src/humanize/` | 内核骨架:意图分类、策略引擎、注入构建与资产加载,不读写宿主 |
 | `schemas/manifest/` | 清单 JSON Schema,与宿主的清单校验规则对齐 |
 | `schemas/runtime/` | 运行时 meta 的 JSON Schema,构建自校验覆盖其中的必填与格式规则 |
 | `scripts/validate-specs.mjs` | 零依赖校验脚本,校验 Schema、样例与本仓库 meta |
-| `scripts/test/` | 测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、快照装配与资产包导入、证书链校验、内核装配、宿主请求前接线 |
+| `scripts/test/` | 测试:分类打分与排序、策略校验与合并、注入拼接、资产按类型读取与校验、快照装配与资产包导入、证书链校验、内核装配、宿主请求前接线、三处槽位的接线 |
 | `specs/` | 规范区:运行时规范、开发规范与版本信息 |
 | `.env.example` | 环境变量模板 |
 
@@ -441,7 +483,9 @@ cp .env.example .env
 
 `net:fetch` 仅内置插件可申请,第三方插件在清单里写它会被拒绝。`assets:read` 对全部插件开放:只 GET、只 https 与回环 http、不带凭证、上限 512KB、超时 10 秒,结果三态(内容 / 状态码 / 无状态码)原样返回;本插件的资产市场只经这条通道取件,不自行发请求。
 
-本插件当前申请 `events:session`、`notify`、`plugins:storage`、`chat:request`、`assets:read`、`settings:surface` 与 `ui:slot` 七项能力,声明 `session:changed`、`chat:before-request`、`ui:slot-action` 与 `ui:slot-data` 四个挂载点,并在 `slots` 白名单里声明 `conversation.tabs`;`plugins:storage` 用于一次性迁移插件存储里的过渡快照,`assets:read` 是资产市场的远端取件通道,`settings:surface` 登记来源开关与自建来源字段,`ui:slot` 与两个 slot 挂载点把「资产市场」登记为会话视图标签栏里的一个标签(见上文「资产市场」节)。
+本插件当前申请 `events:session`、`notify`、`plugins:storage`、`chat:request`、`assets:read`、`settings:surface` 与 `ui:slot` 七项能力,声明 `session:changed`、`chat:before-request`、`ui:slot-action` 与 `ui:slot-data` 四个挂载点,并在 `slots` 白名单里声明 `conversation.tabs`、`composer.toolbar` 与 `overlay.notice` 三个槽位;`plugins:storage` 用于一次性迁移插件存储里的过渡快照并存放人性化开关,`assets:read` 是资产市场的远端取件通道,`settings:surface` 登记来源开关与自建来源字段,`ui:slot` 与两个 slot 挂载点把「资产市场」登记为会话视图标签栏里的一个标签、把「人性化」登记为工具条按钮、把资产状态登记为通知卡片(见上文「资产市场」与「人性化开关与资产状态通知」两节)。
+
+引擎侧对 `ui:slot` 的登记按次数计限流(20 次 / 10 秒,含 `registerSlot`、`onSlotAction` 与 `onSlotData`):本插件激活时登记三处槽位、两份动作回调(市场标签与工具条各一次,引擎按插件只保留最后一份,载荷带 `slot` 分流)与一份数据处理器,切换开关时再加一次 `registerSlot`(同 id 替换),远在预算之内。
 
 ## 发布
 

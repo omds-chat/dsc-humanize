@@ -174,7 +174,9 @@ const storageMap = new Map()
 const logs = []
 const slotEntries = []
 const actionHandlers = []
+const actionSlots = []
 const dataHandlers = []
+const dataSlots = []
 const notices = []
 const context = {
   id: 'dsc-humanize',
@@ -186,14 +188,16 @@ const context = {
     notify: (key, params) => notices.push({ key, params }),
     registerSlot: (slot, descriptor) => {
       slotEntries.push({ slot, descriptor })
-      return { id: descriptor.id, dispose: () => undefined }
+      return { slot, id: descriptor.id, dispose: () => undefined }
     },
-    onSlotAction: (handler) => {
+    onSlotAction: (slot, handler) => {
       actionHandlers.push(handler)
+      actionSlots.push(slot)
       return () => undefined
     },
-    onSlotData: (handler) => {
+    onSlotData: (slot, handler) => {
       dataHandlers.push(handler)
+      dataSlots.push(slot)
       return () => undefined
     },
   },
@@ -256,9 +260,13 @@ const waitUntil = async (probe) => {
 const pageModel = () => dataHandlers[0](MARKET_SLOT, MARKET_SLOT_ID)
 const listBlockOf = (descriptor) => descriptor?.blocks?.find((block) => block.type === 'list')
 
-check('条目已登记到 conversation.tabs 且 id 正确', slotEntries.length === 1 && slotEntries[0]?.slot === MARKET_SLOT && slotEntries[0]?.descriptor.id === MARKET_SLOT_ID)
-check('动作经 ui:slot-action 挂载点接收', actionHandlers.length === 1)
-check('模型经 ui:slot-data 挂载点接收', dataHandlers.length === 1)
+const marketEntry = slotEntries.find((entry) => entry.slot === MARKET_SLOT)
+check('条目已登记到 conversation.tabs 且 id 正确', marketEntry !== undefined && marketEntry.descriptor.id === MARKET_SLOT_ID)
+check('动作经 ui:slot-action 挂载点登记', actionHandlers.length >= 1 && actionSlots.includes(MARKET_SLOT))
+check('模型经 ui:slot-data 挂载点登记', dataHandlers.length === 1 && dataSlots[0] === MARKET_SLOT)
+const toolbarEntry = slotEntries.find((entry) => entry.slot === 'composer.toolbar')
+check('人性化按钮已登记到 composer.toolbar', toolbarEntry !== undefined && String(toolbarEntry.descriptor.label ?? '').includes('人性化'))
+check('空资产包时登记过资产状态通知', slotEntries.some((entry) => entry.slot === 'overlay.notice' && String(entry.descriptor.text ?? '').includes('没有可用的资产包')))
 
 // 第一次进入:缓存为空,显示「读取中」占位并在后台取件
 const firstList = listBlockOf(pageModel())

@@ -126,9 +126,16 @@
     },
     "slot": {
       "type": "string",
+      "description": "槽位枚举,与引擎的 SLOT_NAMES 同源:三个页面型与五个位置型;枚举之外的槽位名按 unknown-slot 拒绝安装",
       "enum": [
         "nav.panel",
-        "conversation.tabs"
+        "conversation.tabs",
+        "settings.page",
+        "composer.toolbar",
+        "composer.notice",
+        "overlay.notice",
+        "message.actions",
+        "menu.item"
       ]
     }
   }

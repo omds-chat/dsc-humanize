@@ -35,6 +35,11 @@ export interface RequestHandlerOptions {
    * 每次请求重新读取,装配方替换内容后不必重新激活。
    */
   contents: () => AssetContents
+  /**
+   * 改写开关:返回 false 时处理器直接返回 null,请求按原样发出。
+   * 每次请求重新读取,所以在会话内翻转立即生效,无需重新登记处理器;缺省恒为开启。
+   */
+  enabled?: () => boolean
   /** 同步分类器,缺省为规则分类器 */
   classifier?: SyncIntentClassifier
   /** 写插件日志,缺省不写 */
@@ -79,6 +84,7 @@ export const createBeforeRequestHandler = (
   options: RequestHandlerOptions,
 ): ChatBeforeRequestHandler => {
   const classifier = options.classifier ?? ruleKeywordClassifier
+  const enabled = options.enabled ?? (() => true)
   const logged = new Set<string>()
   const logOnce = (message: string): void => {
     if (logged.has(message)) return
@@ -87,6 +93,11 @@ export const createBeforeRequestHandler = (
   }
 
   return (preview) => {
+    // 开关关闭:请求保持原样,连内容都不读;打开后立即恢复既有行为
+    if (!enabled()) {
+      logOnce('资产改写已关闭,不修改请求')
+      return null
+    }
     const contents = options.contents()
     const labels = contents.labels?.items ?? []
     const tables: readonly StrategyTable[] = contents.strategies?.items ?? []

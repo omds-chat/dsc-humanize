@@ -22,8 +22,9 @@ The project skeleton comes from dsc-plugin-template: source in TypeScript, bundl
 - a root certificate embedding and chain verification path: the build reads `certs/dsc-humanize/dsc-humanize-root-ca.crt` and injects the PEM as an artifact constant, exported at runtime as `EMBEDDED_ROOT_CA_PEM`; when `importAssetPackage` is given a source certificate it first verifies the two-level root-to-EEC chain and reports the two-axis verdict (signature verdict plus source verdict), degrading the source verdict without blocking the import
 - an asset market logic layer (per [docs/design/asset-market.md](docs/design/asset-market.md)): the manifest requests `assets:read` and `settings:surface`; activation wraps `context.assets.readText` into the kernel transport injection (three-state passthrough: content means the fetch succeeded, status degrades by the 3.x rules, no-status and transport rejections map to transport-failed; without the capability or without an assets member the transport-missing status quo is kept and local assets are unaffected); two built-in sources (the organization preset and the community collection, base_url order per design 2.2, local integration addresses injected by the build and falling back to the production addresses when invalid); the source switches and one custom source (URL and collection id as a pair) are stored through settings-surface fields; the catalog fetch implements the catalog part of design 3.1 (source metadata, collection certificate in three tiers, chain verification against the embedded root, then assets.json), reads both collection metadata shapes compatibly (design 8.2), records the 3.4 two-axis verdicts and reuses `verifySourceTrust` for the chain; the install entry `installMarketPackage` fetches package files one by one against the package-level manifest with SHA-512 comparison, reuses the existing atomic semantics of `importAssetPackage` for whole-package validation, and records the collection id, effective base_url and version in the install record
 - an asset market tab (landed with ui:slot, entry: the asset market tab in the conversation view tab bar; host slot details are governed by the engine docs): the manifest requests the `ui:slot` capability, declares `conversation.tabs` in the `slots` whitelist, and declares the `ui:slot-action` and `ui:slot-data` mounts; activation registers the "asset market" entry onto `conversation.tabs` with `context.ui.registerSlot` (order 50, the title picks one side of a paired zh/en wording by the host locale), the data mount re-fetches the catalog through the existing catalog layer on every model request with a short in-memory cache (5 minutes, bypassed by "refresh catalog"), and the action mount dispatches "install" to `installMarketPackage` and turns "refresh catalog" into a refresh indication; an unavailable source collapses into a single explanatory row, hint-only without blocking; see the "Asset market" section below
+- two extra landing spots (also ui:slot, declared together in the manifest `slots` whitelist): a "Humanize" switch button on `composer.toolbar` (the label carries the on / off state, a click arrives through `ui:slot-action` and flips "whether asset rewriting is enabled"; the value lives under its own storage key `dsc-humanize/rewrite/v1`, the button is re-registered under the same id to refresh, and one bubble reports the current state; while it is off the request hook returns `null` and the request goes out unchanged) and an asset state notice on `overlay.notice` (a persistent notice explaining why, registered only when the asset sources are unreachable or the asset package is unusable, and revoked once the problem is gone — never registered in a healthy state); see "Humanizing switch and asset state notice" below
 - a loopback smoke script: `node --import ./scripts/test/ts-hooks.mjs scripts/smoke-market.mjs` serves two static directories on 127.0.0.1:61120 and 61121 (inner with the indexed shape and the first certificate tier, awesome with the flat shape and the second tier) and walks the full catalog, slot descriptor generation, action dispatch and install path; loopback traffic only
-- a dependency-free test suite: Node `node:test` covers scoring (with exclude keywords, anchored patterns and language detection), dimension synthesis (same-dimension override, cross-dimension concatenation, defaulting to tone, the language gate), contrast example reading and injection, reading and validating assets by type, the 1.1.0 feature version gate, the IndexedDB snapshot wrapper, snapshot assembly with one-time migration, package import, certificate chain verification and the import trust verdict, kernel assembly, the request hook, the market slot descriptor and action dispatch
+- a dependency-free test suite: Node `node:test` covers scoring (with exclude keywords, anchored patterns and language detection), dimension synthesis (same-dimension override, cross-dimension concatenation, defaulting to tone, the language gate), contrast example reading and injection, reading and validating assets by type, the 1.1.0 feature version gate, the IndexedDB snapshot wrapper, snapshot assembly with one-time migration, package import, certificate chain verification and the import trust verdict, kernel assembly, the request hook, the market slot descriptor and action dispatch, and the three slots' wiring (button state follows the switch, the switch lands in storage on click, the notice is registered while sources are unreachable and revoked after they recover)
 
 The kernel lands on requests through the host before-request capability: with assets it rewrites request parameters and the system prompt, and without assets the request stays unchanged. The plugin also logs session switches and shows one install notice through a host message key.
 
@@ -69,6 +70,42 @@ Entry path: the asset market tab in the conversation view tab bar. The tab has l
 - Fetching and refresh: the data mount re-fetches through the existing catalog layer on every model request (source metadata → collection certificate → assets.json), and the catalog results keep a short in-memory cache of 5 minutes (aligned with the design 8.1 recommendation); repeated requests within the TTL do not fetch again, balancing the 20 calls / 10 s budget of assets:read against the 60 calls / 10 s budget of settings:surface. The model request is a synchronous callback, so the first tab entry shows "reading" placeholders and the catalog appears on the next model request or refresh indication.
 - Failure degradation: when a source fails to fetch (all addresses unreachable, missing channel, unreadable index), it collapses into a single explanatory row badged "source unavailable" while the other sources keep listing — hint-only without blocking; when the catalog exceeds the host descriptor size limit (8KB), items are trimmed from the tail and a truncation notice is appended.
 - Install: the action resolves the item key back to source, author and package id through the item registry and hands them to `installMarketPackage` (the same path as the settings-page source resolution; the two-axis verdicts are recomputed on every install); success and failure are both reported with bubble notifications using the paired asset-specific keys the host added — success uses `pluginAssetInstalled` (asset package {id} installed), failure uses `pluginAssetInstallFailed` (asset package {id} failed to install: {reason}), never a native dialog or a modal overlay; the old `pluginInstalled` / `pluginInstallRejected` belong to plugin installation and are no longer reused. Host requirement: the host must already provide this asset-specific pair (`notify` is write-only, so a plugin cannot look up the host dictionary and there is no fallback to the old keys); on older hosts the bubble has no text while the install itself still completes.
+
+## Humanizing switch and asset state notice
+
+All three slots (ui:slot) are declared once at activation; rendering, i18n and styling belong to the host. The plugin submits no controls and uses no routing, dialogs or overlays.
+
+| Slot | Landing spot | This plugin's entry | Behaviour |
+|:---:|:---:|:---:|:---:|
+| `conversation.tabs` | conversation view tab bar | `asset-market` (order 50) | the asset market page, see the previous section |
+| `composer.toolbar` | toolbar under the composer | `rewrite-switch` (order 50) | the "Humanize · on / off" button: a click flips "whether asset rewriting is enabled" |
+| `overlay.notice` | top-right notice stack | `asset-state` (order 50, level `warning`) | registered only while the asset sources are unreachable or the asset package is unusable, explaining why |
+
+### The humanizing button
+
+| Item | Content |
+|:---:|:---:|
+| Label | `Humanize · on` / `Humanize · off` (Chinese `人性化 · 开` / `人性化 · 关`). The host `composer.toolbar` descriptor has a single label field and no separate badge slot, so the state is folded into the label: wording first, state second |
+| Action | a click comes back through `ui:slot-action` with `slot` = `composer.toolbar` and `actionId` = `toggle` |
+| Storage | the value lives under its own plugin-storage key `dsc-humanize/rewrite/v1`, record shape `{ version: 1, enabled }`; kept apart from the snapshot (IndexedDB, the legacy key `dsc-humanize/snapshot/v1` is migration only) and the install records (`dsc-humanize/market/v1`), so the three never disturb each other |
+| Refresh | after a flip the plugin calls `registerSlot` again under the same id: the host replaces same-plugin-same-id registrations, so the button text follows; the toolbar has no page model, so no refresh indication is used |
+| Bubble | one bubble per click, host wording key `pluginHumanizeRewriteToggled` with `{state}` (`on` / `off`); never a dialog or an overlay |
+| Relation to requests | on (the default): the request hook rewrites requests as before; off: the hook returns `null` on its first line without even reading the asset content, so the request goes out unchanged |
+| Read rules | a missing key, a wrong shape or a wrong version all fall back to the default (on), with no partial retention; a failed write is logged and still applies for the current session |
+
+Host requirement: the host dictionary needs a key `pluginHumanizeRewriteToggled` worded like "humanizing rewrite is now {state}". Without it the host i18n fallback shows the key name itself (`notify` is write-only, so a plugin cannot look up the dictionary); the state and the rewrite behaviour are unaffected.
+
+### The asset state notice
+
+| Item | Content |
+|:---:|:---:|
+| When registered | two real problems: every enabled source failed to fetch (or the host provides no `assets:read` channel, or no source is enabled); or the currently assembled asset package is unusable (no items at all, or incomplete — missing the label set or the strategy table, so rewriting cannot take effect) |
+| When revoked | once neither problem holds the registration is disposed; when the wording changes the entry is re-registered under the same id, and identical wording is not registered twice (so the `ui:slot` registration budget is not spent on refresh churn) |
+| Count | exactly one entry, carrying all current reasons in one paragraph; the host merges a plugin's notices into a single card, so per-reason entries would be noise |
+| Level | `warning`: the feature is temporarily unusable, the plugin itself is fine (`error` would overstate it) |
+| Wording | direct text (`text`), not a host wording key: the reason carries an error code and a readable summary that a dictionary key cannot hold; clamped to the host limit of 2000 characters |
+| No false alarms | "no fetch verdict yet" is not unreachable: only a real attempt that failed counts; one reachable source is enough, and per-source failures stay in the market tab's row-by-row explanation |
+| Relation to requests | it only explains the reason, never changes a request or blocks an install: whether rewriting takes effect is still decided by the switch and the asset content |
 
 ## Specs and schemas
 
@@ -121,6 +158,7 @@ dsc-humanize/
 │   │   ├── injection-builder.test.ts
 │   │   ├── kernel.test.ts
 │   │   ├── rule-classifier.test.ts
+│   │   ├── slots.test.ts      # the three slots: button state, switch persistence and the asset state notice
 │   │   ├── snapshot-db.test.ts # IndexedDB snapshot wrapper
 │   │   ├── strategy-engine.test.ts
 │   │   └── trust-chain.test.ts # certificate chain verification and the import trust verdict
@@ -143,6 +181,9 @@ dsc-humanize/
 │   │   ├── root-ca.ts        # embedded asset root certificate PEM constant
 │   │   ├── x509.ts           # dependency-free X.509 parsing and WebCrypto chain verification
 │   │   └── source-verdict.ts # import trust verdicts: signature verdict plus source verdict
+│   ├── slots/                # descriptor models for the two extra slots
+│   │   ├── rewrite-switch.ts # humanizing switch: storage key, read rules and toolbar button descriptor
+│   │   └── asset-notice.ts   # asset state notice: registration conditions, wording and source reachability
 │   └── humanize/             # kernel skeleton, not wired to the host
 │       ├── index.ts          # kernel public surface
 │       ├── kernel.ts         # kernel assembly: classify -> strategy -> inject
@@ -169,11 +210,12 @@ dsc-humanize/
 | `src/manifest.ts` | Runtime manifest, still exported by the output |
 | `src/host/` | Request hook and asset delivery: applies for `chat:request` and maps kernel results onto a host patch; reads the active-usage snapshot from IndexedDB and migrates the interim plugin-storage snapshot once |
 | `src/trust/` | Embedded asset root certificate constant plus source certificate chain verification: dependency-free DER parsing, WebCrypto signature verification and the import trust verdicts |
+| `src/slots/` | Descriptor models for the two extra slots: the humanizing switch (storage key, read rules, button wording and bubble params) and the asset state notice (registration conditions, wording, package-usability check) |
 | `src/humanize/` | Kernel skeleton: intent classification, strategy engine, injection assembly and asset loading; it never reads or writes host state |
 | `schemas/manifest/` | Manifest JSON Schema, aligned with the host manifest checks |
 | `schemas/runtime/` | JSON Schema for the runtime meta; the build self-validation covers its required and format rules |
 | `scripts/validate-specs.mjs` | Dependency-free validator for the schemas, samples and this repository meta |
-| `scripts/test/` | Tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, the IndexedDB snapshot wrapper, snapshot assembly and one-time migration, package import, certificate chain verification, kernel assembly, request hook wiring |
+| `scripts/test/` | Tests: scoring and ordering, strategy validation and merging, injection assembly, reading and validating assets by type, the IndexedDB snapshot wrapper, snapshot assembly and one-time migration, package import, certificate chain verification, kernel assembly, request hook wiring, and the three slots' wiring |
 | `specs/` | Spec area: runtime spec, development spec, version info |
 | `.env.example` | Environment template |
 
@@ -430,7 +472,9 @@ The two are complementary but do not coexist: use this plugin when you want a sh
 
 `net:fetch` is available to built-in plugins only; a third-party manifest that requests it is rejected. `assets:read` is available to all plugins: GET only, https and loopback http only, no credentials, a 512KB body limit, a 10-second timeout, and a three-state result (content / status code / no status code) returned as is; this plugin's asset market fetches exclusively through that channel and sends no request on its own.
 
-This plugin currently requests `events:session`, `notify`, `plugins:storage`, `chat:request`, `assets:read`, `settings:surface` and `ui:slot`, and declares `session:changed`, `chat:before-request`, `ui:slot-action` and `ui:slot-data`, plus `conversation.tabs` in the `slots` whitelist; `plugins:storage` is used for the one-time migration of the interim plugin-storage snapshot, `assets:read` is the remote fetch channel of the asset market, `settings:surface` registers the source switches and the custom-source fields, and `ui:slot` together with the two slot mounts registers "asset market" as a tab in the conversation view tab bar (see the "Asset market" section above).
+This plugin currently requests `events:session`, `notify`, `plugins:storage`, `chat:request`, `assets:read`, `settings:surface` and `ui:slot`, and declares `session:changed`, `chat:before-request`, `ui:slot-action` and `ui:slot-data`, plus `conversation.tabs`, `composer.toolbar` and `overlay.notice` in the `slots` whitelist; `plugins:storage` is used for the one-time migration of the interim plugin-storage snapshot and holds the humanizing switch, `assets:read` is the remote fetch channel of the asset market, `settings:surface` registers the source switches and the custom-source fields, and `ui:slot` together with the two slot mounts registers "asset market" as a tab in the conversation view tab bar, "Humanize" as a toolbar button, and the asset state as a notice card (see the "Asset market" and "Humanizing switch and asset state notice" sections above).
+
+The engine rate-limits `ui:slot` per registration (20 calls / 10 s, covering `registerSlot`, `onSlotAction` and `onSlotData`): activation registers three slots, two action registrations (market tab and toolbar — the engine keeps one action handler per plugin and the payload's `slot` routes it) and one data handler, and every flip adds one `registerSlot` (same-id replacement), far inside the budget.
 
 ## Publishing
 

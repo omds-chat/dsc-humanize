@@ -112,11 +112,35 @@ export interface PluginEventsApi {
 }
 
 /**
- * ui:slot 的挂载点枚举;取值来自引擎的封闭词表,未知名的登记会被拒绝。
+ * ui:slot 的挂载点枚举;取值来自引擎的封闭词表(SLOT_NAMES,八项),未知名的登记会被拒绝,
+ * 且必须同时写入清单 slots 白名单(slot-not-granted)。
  * nav.panel:侧边栏顶部导航行 + 主区整页;
- * conversation.tabs:会话视图标签栏里的一个标签 + 主区整页。
+ * conversation.tabs:会话视图标签栏里的一个标签 + 主区整页;
+ * settings.page:系统设置里插件自有的一页;
+ * composer.toolbar:输入框下方工具条里的一个按钮;
+ * composer.notice:输入框上方的一条通知条;
+ * overlay.notice:右上角通知栈里的一条通知(同一插件的多条合并成一张卡片);
+ * message.actions:助手消息底部的一组按钮;
+ * menu.item:会话行与消息右键菜单里的一项。
  */
-export type PluginSlotName = 'nav.panel' | 'conversation.tabs'
+export type PluginSlotName =
+  | 'nav.panel'
+  | 'conversation.tabs'
+  | 'settings.page'
+  | 'composer.toolbar'
+  | 'composer.notice'
+  | 'overlay.notice'
+  | 'message.actions'
+  | 'menu.item'
+
+/** 页面型槽位:描述复用区块模型,宿主渲染整页或设置里的一页 */
+export type PluginPageSlotName = 'nav.panel' | 'conversation.tabs' | 'settings.page'
+
+/**
+ * 通知强度;composer.notice 的字段叫 tone,overlay.notice 叫 level,取值同一套。
+ * 与宿主 dsc-plugin-engine 的 NoticeLevel 对齐。
+ */
+export type PluginNoticeLevel = 'info' | 'warning' | 'error'
 
 /**
  * 动作按钮的描述;actions 区块与 list 区块的逐条动作共用这一形态。
@@ -176,14 +200,16 @@ export type PluginSlotBlock =
   | PluginSlotTextBlock
   | PluginSlotActionsBlock
 
-/** registerSlot 返回的句柄;释放函数撤销该 slot 的登记 */
+/** registerSlot 返回的句柄;dispose 撤销该 slot 的登记,停用随引擎清理 */
 export interface PluginSlotHandle {
+  /** 登记到哪个 slot */
+  readonly slot: PluginSlotName
   readonly id: string
   dispose(): void
 }
 
 /**
- * 一份 slot 描述:声明登记到哪个 slot 与这个 slot 里的条目。
+ * 页面型槽位的描述(带区块模型):nav.panel、conversation.tabs 与 settings.page 共用。
  * id、order、iconKey 与区块 id、条目键、动作键共用 settings 字段键的词表
  * (^[a-z][a-z0-9-]{0,63}$),描述序列化后不超过 8KB;
  * 同一 slot 内 id 重复、slot 不在枚举或不在清单白名单、blocks 非法时
@@ -203,11 +229,54 @@ export interface PluginSlotDescriptor {
   readonly blocks: readonly PluginSlotBlock[]
 }
 
-/** 带挂载点的 slot 描述;registerSlot 的实参 */
+/**
+ * composer.toolbar 的描述:工具条里的一个按钮,只有文案与动作键。
+ * 宿主按 labelKey 或 label 渲染按钮文字(没有独立的徽标位),点击时把 actionKey
+ * 作为 actionId 交给 ui:slot-action。
+ */
+export interface PluginSlotToolbarDescriptor {
+  /** 按钮的槽位 id;同一槽位内跨插件唯一 */
+  readonly id: string
+  /** 按钮文案;与 labelKey 二选一 */
+  readonly labelKey?: string
+  readonly label?: string
+  /** 排序权重;宿主按 order 升序排列,同 order 按登记顺序 */
+  readonly order?: number
+  /** 动作键;回调时作为 actionId 交给插件 */
+  readonly actionKey: string
+}
+
+/**
+ * overlay.notice 的描述:右上角通知栈里的一条。
+ * 同一插件的多条通知会被宿主合并成一张悬浮卡片(按插件分组),按 level 着色;
+ * 正文 textKey 与 text 二选一,text 是插件直给文案。
+ */
+export interface PluginSlotOverlayNoticeDescriptor {
+  /** 通知的槽位 id;同一槽位内跨插件唯一 */
+  readonly id: string
+  /** 强度;info / warning / error */
+  readonly level: PluginNoticeLevel
+  /** 正文;与 textKey 二选一 */
+  readonly textKey?: string
+  readonly text?: string
+  /** 排序权重;宿主按 order 升序排列,同 order 按登记顺序 */
+  readonly order?: number
+}
+
+/**
+ * registerSlot 的第二个实参:描述体不带 slot 字段,落点由第一个实参给出
+ * (与宿主 SlotDescriptorBody 同形,避免描述体与落点各写一份而漂移)。
+ */
+export type PluginSlotDescriptorBody =
+  | PluginSlotDescriptor
+  | PluginSlotToolbarDescriptor
+  | PluginSlotOverlayNoticeDescriptor
+
+/** 一份带落点的 slot 登记记录;便于日志与夹具按 (slot, id) 定位 */
 export interface PluginSlotRegistration {
   /** 登记到哪个 slot;取值来自 PluginSlotName,且须在清单 slots 白名单内 */
   readonly slot: PluginSlotName
-  readonly descriptor: PluginSlotDescriptor
+  readonly descriptor: PluginSlotDescriptorBody
 }
 
 /** slot 动作回调的载荷;form 是宿主收集的表单草稿值,描述没有 form 区块时不出现 */
@@ -230,26 +299,38 @@ export type PluginSlotActionHandler = (
 ) => PluginSlotActionResponse | undefined
 
 /**
+ * ui:slot-data 回流的页面模型:页面型描述加上槽位头。
+ * 宿主按 (slot, id) 校验一致性,slot 与 id 与索取时不一致的模型会被拒绝并回落到缺省模型。
+ */
+export interface PluginSlotPageModel extends PluginSlotDescriptor {
+  readonly slot: PluginSlotName
+}
+
+/**
  * slot 数据处理器;同步返回当前 slot 的模型。
- * 返回描述时其 slot 字段必须与登记时一致;返回空值表示沿用登记时的缺省模型。
+ * 只有页面型槽位有页面模型;返回空值表示沿用登记时的缺省模型。
  */
 export type PluginSlotDataHandler = (
   slot: PluginSlotName,
   id: string,
-) => PluginSlotDescriptor | null | undefined
+) => PluginSlotPageModel | null | undefined
 
 /**
  * 能力 notify 与 ui:slot。
- * notify 的 key 取自宿主 i18n 的既有文案键,插件不自造文案;
+ * notify 的 key 取自宿主 i18n 的文案键;字典里没有的键由宿主回落到键名本身,
+ * 因此本插件用到的资产包与改写开关专用键(pluginAssetInstalled 等)需宿主提供,清单见 README;
  * registerSlot 按 (slot, id) 登记一份声明式 slot 描述,宿主据此渲染挂载点,
- * 描述非法时抛结构化错误;onSlotAction 与 onSlotData 分别登记 slot 动作回调
- * 与数据索取处理器,都要求清单声明对应挂载点,登记返回释放函数,停用随引擎清理。
+ * 描述非法或槽位未写入清单 slots 白名单时抛结构化错误;
+ * onSlotAction(slot, handler) 与 onSlotData(slot, handler) 分别登记动作回调与
+ * 数据索取处理器,同样按槽位授权;引擎对每个插件只保留一份动作回调与一份数据
+ * 处理器(后登记者替换前一份),回调载荷带 slot 供同一份回调区分落点。
+ * 三个登记成员都返回释放函数,停用随引擎清理。
  */
 export interface PluginUiApi {
   notify(key: string, params?: Record<string, string | number>): void
-  registerSlot(slot: PluginSlotName, descriptor: PluginSlotDescriptor): PluginSlotHandle
-  onSlotAction(handler: PluginSlotActionHandler): () => void
-  onSlotData(handler: PluginSlotDataHandler): () => void
+  registerSlot(slot: PluginSlotName, descriptor: PluginSlotDescriptorBody): PluginSlotHandle
+  onSlotAction(slot: PluginSlotName, handler: PluginSlotActionHandler): () => void
+  onSlotData(slot: PluginSlotName, handler: PluginSlotDataHandler): () => void
 }
 
 /** 设置字段的类型;控件形态由宿主按类型渲染,插件只交描述、不交控件 */
