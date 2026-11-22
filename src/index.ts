@@ -132,9 +132,20 @@ export const setMarketInstaller = (installer?: MarketInstaller): void => {
   pageInstaller = installer ?? null
 }
 
-/** 安装结果提示用的宿主文案键;宿主没有资产市场专用键,复用插件安装的最近似键 */
-const INSTALL_SUCCESS_KEY = 'pluginInstalled'
-const INSTALL_FAILED_KEY = 'pluginInstallRejected'
+/**
+ * 安装气泡用的宿主文案键。宿主主线已为资产包新增成对键:
+ * pluginAssetInstalled(资产包 {id} 安装完成)与
+ * pluginAssetInstallFailed(资产包 {id} 安装失败:{reason})。
+ * 旧键 pluginInstalled / pluginInstallRejected 是插件安装的文案,文案里说的是「插件」,
+ * 用在资产包上会把资产说成插件,所以这里直切资产专用键。
+ *
+ * 兼容策略:notify(key, params) 只写不读,宿主也没有提供「字典里有没有这个键」的查询能力,
+ * 插件在运行时探测不到键是否存在,因此不在这里做「缺键回落旧键」的分支——能探测才回落,
+ * 探测不到就直切。宿主未提供这对键时气泡取不到文案(不显示文字),安装本身照常完成;
+ * 兼容下限写在 README「资产市场」一节:宿主需为资产包提供这两个键。
+ */
+const INSTALL_SUCCESS_KEY = 'pluginAssetInstalled'
+const INSTALL_FAILED_KEY = 'pluginAssetInstallFailed'
 
 /** 激活时拿到的 notify 出口;未激活时页面动作不提示 */
 let notifier: ((key: string, params?: Record<string, string | number>) => void) | null = null

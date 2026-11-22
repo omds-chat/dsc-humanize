@@ -285,7 +285,7 @@ check('安装条目带来源徽标', innerItem !== undefined && innerItem.badge 
 notices.length = 0
 actionHandlers[0]({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: innerItem.key })
 await waitUntil(() => notices.length > 0)
-check('安装动作成功提示', notices.some((n) => n.key === 'pluginInstalled' && n.params?.id === PKG), JSON.stringify(notices))
+check('安装动作成功提示走资产专用键', notices.some((n) => n.key === 'pluginAssetInstalled' && n.params?.id === PKG), JSON.stringify(notices))
 check('安装动作后安装记录新增', storageMap.get('dsc-humanize/market/v1')?.installs?.length === 2)
 
 // 失败降级:撤掉 awesome 侧 meta.json 并强制刷新,该来源折叠成「来源不可用」一行

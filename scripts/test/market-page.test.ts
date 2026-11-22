@@ -393,7 +393,7 @@ test('install 动作: 按条目键分发到安装层,成功用 notify 提示', a
   action({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
   await waitUntil(() => fake.notices.length > 0)
   assert.deepEqual(calls, [{ sourceId: 'dsc-humanize-inner-asset', author: 'omds-chat', packageId: 'pkg-a' }])
-  assert.equal(fake.notices[0]?.key, 'pluginInstalled')
+  assert.equal(fake.notices[0]?.key, 'pluginAssetInstalled')
   assert.equal(fake.notices[0]?.params?.id, 'pkg-a')
 })
 
@@ -427,7 +427,7 @@ test('install 动作: 安装失败降级为失败提示,不弹窗不阻断', asy
 
   action({ pageId: MARKET_PAGE_ID, actionId: INSTALL_ACTION_KEY, itemKey: target.key })
   await waitUntil(() => fake.notices.length > 0)
-  assert.equal(fake.notices[0]?.key, 'pluginInstallRejected')
+  assert.equal(fake.notices[0]?.key, 'pluginAssetInstallFailed')
   assert.equal(fake.notices[0]?.params?.id, 'pkg-a')
   assert.ok(String(fake.notices[0]?.params?.reason).includes('manifest-missing'))
 })
