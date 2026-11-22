@@ -152,36 +152,45 @@ export type ResolvedSources = {
  * 合集 id 与已有来源(含内置)同 id 时拒绝(2.3),地址不合法时同样忽略。
  * 每一条忽略都记进 notes,不静默丢弃。
  */
+/**
+ * 注入地址合法时只用它一份，不保留线上兜底，避免本地联调仍去请求外网；
+ * 注入值缺失或非法时退回线上列表，fallsBack 标记这次退回以便记进 notes。
+ */
+const resolveBaseUrls = (
+  injected: string,
+  online: readonly string[]
+): { urls: string[]; fallsBack: boolean } => {
+  const local = normalizeSourceBaseUrl(injected)
+  if (local !== null) {
+    return { urls: [local], fallsBack: false }
+  }
+  return { urls: [...online], fallsBack: injected.trim() !== '' }
+}
+
 export const resolveMarketSources = (values: Record<string, PluginSettingValue> | null): ResolvedSources => {
   const notes: string[] = []
   const sources: MarketSource[] = []
 
-  const innerBaseUrls = [...INNER_PRODUCTION_BASE_URLS]
-  const innerInjected = normalizeSourceBaseUrl(readInjectedInnerUrl())
-  if (innerInjected !== null) {
-    innerBaseUrls.unshift(innerInjected)
-  } else if (readInjectedInnerUrl().trim() !== '') {
+  const inner = resolveBaseUrls(readInjectedInnerUrl(), INNER_PRODUCTION_BASE_URLS)
+  if (inner.fallsBack) {
     notes.push('内置来源 ' + INNER_ASSET_COLLECTION_ID + ' 的注入地址非法,已退回线上地址')
   }
   sources.push({
     id: INNER_ASSET_COLLECTION_ID,
     name: '组织预设资产包',
-    baseUrls: innerBaseUrls,
+    baseUrls: inner.urls,
     builtin: true,
     enabled: readSwitch(values, SETTING_KEYS.innerSourceEnabled),
   })
 
-  const awesomeBaseUrls = [...AWESOME_PRODUCTION_BASE_URLS]
-  const awesomeInjected = normalizeSourceBaseUrl(readInjectedAwesomeUrl())
-  if (awesomeInjected !== null) {
-    awesomeBaseUrls.unshift(awesomeInjected)
-  } else if (readInjectedAwesomeUrl().trim() !== '') {
+  const awesome = resolveBaseUrls(readInjectedAwesomeUrl(), AWESOME_PRODUCTION_BASE_URLS)
+  if (awesome.fallsBack) {
     notes.push('内置来源 ' + AWESOME_ASSET_COLLECTION_ID + ' 的注入地址非法,已退回线上地址')
   }
   sources.push({
     id: AWESOME_ASSET_COLLECTION_ID,
     name: '社区资产包',
-    baseUrls: awesomeBaseUrls,
+    baseUrls: awesome.urls,
     builtin: true,
     enabled: readSwitch(values, SETTING_KEYS.awesomeSourceEnabled),
   })
